@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ЗибСтор — Ключи игр | Честное сравнение цен</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            nox: {
+              bg: '#141111',
+              card: '#1c1816',
+              accent: '#fbbb43',
+              muted: '#9a8f84',
+              border: '#2a2420'
+            }
+          },
+          fontFamily: {
+            display: ['Unbounded', 'system-ui', 'sans-serif'],
+            body: ['Manrope', 'system-ui', 'sans-serif']
+          }
+        }
+      }
+    }
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Unbounded:wght@500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Manrope', system-ui, sans-serif; background: #141111; color: #f5f0e8; }
+    .font-display { font-family: 'Unbounded', system-ui, sans-serif; }
+  </style>
+</head>
+<body class="min-h-screen bg-nox-bg text-white antialiased">
+  <!-- Header -->
+  <header class="sticky top-0 z-50 border-b border-nox-border bg-nox-bg/95 backdrop-blur">
+    <div class="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3 sm:gap-4">
+      <a href="/" class="flex shrink-0 items-center gap-2">
+        <span class="font-display text-xl font-bold tracking-tight text-nox-accent">ЗибСтор</span>
+      </a>
+      <div class="relative min-w-0 flex-1 max-w-xl">
+        <svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-nox-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z"/>
+        </svg>
+        <input
+          id="search-input"
+          type="search"
+          placeholder="Поиск товара..."
+          autocomplete="off"
+          class="w-full rounded-full border border-nox-border bg-nox-card py-2 pl-10 pr-4 text-sm text-white placeholder:text-nox-muted outline-none transition focus:border-nox-accent focus:ring-1 focus:ring-nox-accent/40"
+        />
+      </div>
+      <nav class="hidden shrink-0 items-center gap-4 text-sm sm:flex ml-2 pl-2">
+        <a href="#catalog" class="text-nox-muted hover:text-nox-accent transition">Каталог</a>
+        <a href="#how" class="text-nox-muted hover:text-nox-accent transition">Как купить</a>
+        <a href="https://t.me/" target="_blank" rel="noopener" title="Написать в Telegram" class="text-nox-muted hover:text-nox-accent transition" aria-label="Telegram">
+          <svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221l-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.446 1.394c-.14.18-.357.223-.548.223l.188-2.85 5.18-4.68c.223-.198-.054-.31-.346-.113l-6.4 4.02-2.76-.918c-.6-.187-.612-.6.125-.89l10.782-4.156c.5-.18.94.112.78.89z"/>
+          </svg>
+        </a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <!-- Hero -->
+    <section class="relative overflow-hidden border-b border-nox-border">
+      <div class="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-nox-accent/10 via-transparent to-transparent"></div>
+      <div class="relative mx-auto max-w-6xl px-4 py-12 text-center sm:py-16">
+        <div class="text-center">
+          <h1 class="font-display text-3xl font-bold tracking-tight text-nox-accent sm:text-5xl">
+            ЗибСтор
+          </h1>
+          <p class="mt-3 mx-auto max-w-md text-lg text-nox-muted sm:text-xl">
+            Честное сравнение цен и удобство сортировки
+          </p>
+        </div>
+        <p class="mx-auto mt-3 max-w-xl text-sm text-nox-muted">
+          Ключи для игр с быстрой выдачей. Оплата через Digiseller · WebMoney, карты, крипта.
+          Регион: Россия и СНГ.
+        </p>
+      </div>
+    </section>
+
+    <!-- Catalog -->
+    <section id="catalog" class="mx-auto max-w-6xl px-4 py-12">
+      <div class="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <h2 class="font-display text-2xl font-bold">Витрина</h2>
+        <label class="flex items-center gap-2 text-sm text-nox-muted">
+          <span class="shrink-0">Сортировка</span>
+          <select id="sort-select" class="rounded-full border border-nox-border bg-nox-card px-3 py-1.5 text-sm text-white outline-none focus:border-nox-accent">
+            <option value="popular" selected>Популярные</option>
+            <option value="price-asc">Дешёвые</option>
+            <option value="price-desc">Дорогие</option>
+            <option value="discount">Большая выгода</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="mb-8 flex flex-wrap gap-2" id="filters">
+        <button type="button" data-filter="all" class="filter-btn rounded-full bg-nox-accent px-4 py-2 text-sm font-semibold text-nox-bg">Все</button>
+        <button type="button" data-filter="keys" class="filter-btn rounded-full border border-nox-border px-4 py-2 text-sm text-nox-muted hover:border-nox-accent hover:text-nox-accent transition">Ключи Steam</button>
+        <button type="button" data-filter="gifts" class="filter-btn rounded-full border border-nox-border px-4 py-2 text-sm text-nox-muted hover:border-nox-accent hover:text-nox-accent transition">Гифты Steam</button>
+        <button type="button" data-filter="topup" class="filter-btn rounded-full border border-nox-border px-4 py-2 text-sm text-nox-muted hover:border-nox-accent hover:text-nox-accent transition">Пополнение</button>
+      </div>
+
+      <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3" id="product-grid">
+
+        <!-- DOOM Premium (package) -->
+        <article class="product-card group rounded-2xl border border-nox-border bg-nox-card overflow-hidden transition hover:border-nox-accent/40"
+                 data-category="keys" data-price="1986" data-popular="1"
+                 data-steam-id="1221725" data-steam-type="package" data-our-price="1986">
+          <div class="relative aspect-[16/10] bg-gradient-to-br from-red-950/50 to-zinc-900 flex items-center justify-center">
+            <span class="font-display text-3xl text-red-400/40">DOOM</span>
+            <span class="absolute left-3 top-3 rounded-md bg-emerald-500/90 px-2 py-0.5 text-[11px] font-bold text-white discount-badge hidden">−%</span>
+          </div>
+          <div class="p-5">
+            <div class="flex items-start justify-between gap-2">
+              <h3 class="font-display text-lg font-semibold leading-tight">DOOM: The Dark Ages Premium</h3>
+              <span class="shrink-0 rounded bg-nox-accent/15 px-2 py-0.5 text-xs font-medium text-nox-accent">Ключ</span>
+            </div>
+            <p class="mt-2 text-sm text-nox-muted line-clamp-2">Premium Edition · Steam. Выдача в течение нескольких минут.</p>
+            <div class="mt-4 rounded-xl border border-nox-border bg-nox-bg/60 p-3 space-y-2">
+              <div class="flex items-end justify-between gap-3">
+                <div>
+                  <div class="text-[11px] uppercase tracking-wide text-nox-muted">У нас</div>
+                  <div class="font-display text-2xl font-bold text-nox-accent leading-none">1 986 ₽</div>
+                </div>
+                <div class="text-right">
+                  <div class="text-[11px] uppercase tracking-wide text-nox-muted">В Steam</div>
+                  <div class="steam-price text-sm text-nox-muted">загрузка…</div>
+                </div>
+              </div>
+              <div class="steam-meta text-[11px] text-nox-muted hidden"></div>
+            </div>
+            <a href="https://www.oplata.info/asp2/pay.asp?id_d=PRODUCT_ID&agent=810015&lang=ru-RU" target="_blank" rel="noopener"
+               class="mt-4 flex w-full items-center justify-center rounded-xl bg-nox-accent px-4 py-2.5 text-sm font-bold text-nox-bg hover:bg-yellow-400 transition">
+              Купить
+            </a>
+          </div>
+        </article>
+
+        <!-- AC Black Flag -->
+        <article class="product-card group rounded-2xl border border-nox-border bg-nox-card overflow-hidden transition hover:border-nox-accent/40"
+                 data-category="keys" data-price="3163" data-popular="2"
+                 data-steam-id="3751950" data-steam-type="app" data-our-price="3163">
+          <div class="relative aspect-[16/10] bg-gradient-to-br from-sky-950/50 to-zinc-900 flex items-center justify-center">
+            <span class="font-display text-2xl text-sky-400/40">AC BF</span>
+            <span class="absolute left-3 top-3 rounded-md bg-emerald-500/90 px-2 py-0.5 text-[11px] font-bold text-white discount-badge hidden">−%</span>
+          </div>
+          <div class="p-5">
+            <div class="flex items-start justify-between gap-2">
+              <h3 class="font-display text-lg font-semibold leading-tight">Assassin's Creed Black Flag Resynced</h3>
+              <span class="shrink-0 rounded bg-nox-accent/15 px-2 py-0.5 text-xs font-medium text-nox-accent">Ключ</span>
+            </div>
+            <p class="mt-2 text-sm text-nox-muted line-clamp-2">Steam-ключ. Регион уточняйте в описании товара.</p>
+            <div class="mt-4 rounded-xl border border-nox-border bg-nox-bg/60 p-3 space-y-2">
+              <div class="flex items-end justify-between gap-3">
+                <div>
+                  <div class="text-[11px] uppercase tracking-wide text-nox-muted">У нас</div>
+                  <div class="font-display text-2xl font-bold text-nox-accent leading-none">3 163 ₽</div>
+                </div>
+                <div class="text-right">
+                  <div class="text-[11px] uppercase tracking-wide text-nox-muted">В Steam</div>
+                  <div class="steam-price text-sm text-nox-muted">загрузка…</div>
+                </div>
+              </div>
+              <div class="steam-meta text-[11px] text-nox-muted hidden"></div>
+            </div>
+            <a href="https://www.oplata.info/asp2/pay.asp?id_d=PRODUCT_ID&agent=810015&lang=ru-RU" target="_blank" rel="noopener"
+               class="mt-4 flex w-full items-center justify-center rounded-xl bg-nox-accent px-4 py-2.5 text-sm font-bold text-nox-bg hover:bg-yellow-400 transition">
+              Купить
+            </a>
+          </div>
+        </article>
+
+        <!-- Placeholder topup -->
+        <article class="product-card group rounded-2xl border border-nox-border bg-nox-card overflow-hidden transition hover:border-nox-accent/40"
+                 data-category="topup" data-price="500" data-popular="3"
+                 data-steam-id="" data-steam-type="" data-our-price="500">
+          <div class="relative aspect-[16/10] bg-gradient-to-br from-emerald-950/40 to-zinc-900 flex items-center justify-center">
+            <span class="font-display text-3xl text-emerald-400/40">500 ₽</span>
+          </div>
+          <div class="p-5">
+            <div class="flex items-start justify-between gap-2">
+              <h3 class="font-display text-lg font-semibold leading-tight">Пополнение Steam 500 ₽</h3>
+              <span class="shrink-0 rounded bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-300">Top-up</span>
+            </div>
+            <p class="mt-2 text-sm text-nox-muted line-clamp-2">Пополнение кошелька Steam. Логин после оплаты.</p>
+            <div class="mt-4 rounded-xl border border-nox-border bg-nox-bg/60 p-3">
+              <div class="text-[11px] uppercase tracking-wide text-nox-muted">Цена</div>
+              <div class="font-display text-2xl font-bold text-nox-accent leading-none">500 ₽</div>
+            </div>
+            <a href="https://www.oplata.info/asp2/pay.asp?id_d=PRODUCT_ID&agent=810015&lang=ru-RU" target="_blank" rel="noopener"
+               class="mt-4 flex w-full items-center justify-center rounded-xl bg-nox-accent px-4 py-2.5 text-sm font-bold text-nox-bg hover:bg-yellow-400 transition">
+              Купить
+            </a>
+          </div>
+        </article>
+
+      </div>
+      <p id="empty-state" class="hidden mt-10 text-center text-nox-muted">В этой категории пока нет товаров</p>
+      <p class="mt-6 text-center text-xs text-nox-muted">Цены Steam подгружаются автоматически · курс ЦБ РФ</p>
+    </section>
+
+    <!-- How to buy -->
+    <section id="how" class="mx-auto max-w-6xl px-4 py-14">
+      <h2 class="font-display text-2xl font-bold">Как купить</h2>
+      <div class="mt-8 grid gap-6 sm:grid-cols-3">
+        <div class="rounded-xl border border-nox-border p-5">
+          <div class="text-2xl font-display text-nox-accent">01</div>
+          <h3 class="mt-2 font-semibold">Выбери игру</h3>
+          <p class="mt-1 text-sm text-nox-muted">Нажми «Купить» — откроется защищённая страница оплаты Digiseller / oplata.info</p>
+        </div>
+        <div class="rounded-xl border border-nox-border p-5">
+          <div class="text-2xl font-display text-nox-accent">02</div>
+          <h3 class="mt-2 font-semibold">Оплати</h3>
+          <p class="mt-1 text-sm text-nox-muted">Карта, WebMoney, СБП, крипта и другие способы. Платежи обрабатывает Digiseller.</p>
+        </div>
+        <div class="rounded-xl border border-nox-border p-5">
+          <div class="text-2xl font-display text-nox-accent">03</div>
+          <h3 class="mt-2 font-semibold">Получи ключ</h3>
+          <p class="mt-1 text-sm text-nox-muted">На email и в личный кабинет Digiseller — обычно в течение нескольких минут. Активация в Steam.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="border-t border-nox-border py-8 text-center text-sm text-nox-muted">
+    <p>ЗибСтор · Ключи игр · Россия и СНГ</p>
+  </footer>
+<script>
+    // Поиск: при Enter скролл к витрине
+    const searchInput = document.getElementById('search-input');
+    if (searchInput) {
+      searchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          document.getElementById('catalog')?.scrollIntoView({ behavior: 'smooth' });
+        }
+      });
+    }
+  </script>
+
+
+  <script>
+    const formatRub = (n) =>
+      (Math.round(n)).toLocaleString('ru-RU') + ' ₽';
+
+    async function loadSteamPrice(card) {
+      const id = card.dataset.steamId;
+      const type = card.dataset.steamType || '';
+      const our = parseFloat(card.dataset.ourPrice || card.dataset.price || '0');
+      const priceEl = card.querySelector('.steam-price');
+      const metaEl = card.querySelector('.steam-meta');
+      const badge = card.querySelector('.discount-badge');
+
+      if (!id || !priceEl) {
+        if (priceEl) priceEl.textContent = '—';
+        return;
+      }
+
+      try {
+        const qs = new URLSearchParams({ appid: id });
+        if (type) qs.set('type', type);
+        const res = await fetch('/.netlify/functions/steam-price?' + qs.toString());
+        const data = await res.json();
+
+        if (!data.available) {
+          priceEl.textContent = 'нет в Steam';
+          priceEl.classList.remove('line-through');
+          return;
+        }
+
+        const steamRub = data.final_rub;
+        priceEl.textContent = formatRub(steamRub);
+        priceEl.classList.add('line-through');
+        priceEl.title = data.steam_url || '';
+
+        if (metaEl) {
+          const parts = [];
+          if (data.cc) parts.push('регион ' + data.cc.toUpperCase());
+          if (data.currency && data.currency !== 'RUB') {
+            parts.push(data.final.toLocaleString('ru-RU') + ' ' + data.currency);
+          }
+          if (our > 0 && steamRub > 0) {
+            const diff = Math.round((1 - our / steamRub) * 100);
+            if (diff > 0) {
+              parts.push('выгода ' + diff + '%');
+              if (badge) {
+                badge.textContent = '−' + diff + '%';
+                badge.classList.remove('hidden');
+              }
+              card.dataset.discount = String(diff);
+            }
+          }
+          metaEl.textContent = parts.join(' · ');
+          metaEl.classList.remove('hidden');
+        }
+      } catch (e) {
+        priceEl.textContent = 'ошибка';
+      }
+    }
+
+    // filters / sort
+    const filterBtns = document.querySelectorAll('.filter-btn');
+    const productGrid = document.getElementById('product-grid');
+    const emptyState = document.getElementById('empty-state');
+    const searchInput = document.getElementById('search-input');
+    const sortSelect = document.getElementById('sort-select');
+    let activeFilter = 'all';
+
+    function getCards() {
+      return Array.from(document.querySelectorAll('.product-card'));
+    }
+
+    function setActive(btn) {
+      filterBtns.forEach(b => {
+        b.classList.remove('bg-nox-accent', 'text-nox-bg', 'font-semibold');
+        b.classList.add('border', 'border-nox-border', 'text-nox-muted');
+      });
+      btn.classList.add('bg-nox-accent', 'text-nox-bg', 'font-semibold');
+      btn.classList.remove('border', 'border-nox-border', 'text-nox-muted');
+    }
+
+    function applyFilters() {
+      const q = (searchInput?.value || '').trim().toLowerCase();
+      const mode = sortSelect?.value || 'popular';
+      let cards = getCards();
+
+      cards.sort((a, b) => {
+        if (mode === 'price-asc') return (+a.dataset.price) - (+b.dataset.price);
+        if (mode === 'price-desc') return (+b.dataset.price) - (+a.dataset.price);
+        if (mode === 'discount') return (+(b.dataset.discount || 0)) - (+(a.dataset.discount || 0));
+        return (+a.dataset.popular) - (+b.dataset.popular);
+      });
+
+      let visible = 0;
+      cards.forEach(card => {
+        const cat = card.dataset.category || '';
+        const text = (card.textContent || '').toLowerCase();
+        const show = (activeFilter === 'all' || cat === activeFilter) && (!q || text.includes(q));
+        card.style.display = show ? '' : 'none';
+        if (show) visible++;
+        productGrid?.appendChild(card);
+      });
+      emptyState?.classList.toggle('hidden', visible > 0);
+    }
+
+    filterBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        activeFilter = btn.dataset.filter;
+        setActive(btn);
+        applyFilters();
+      });
+    });
+    searchInput?.addEventListener('input', applyFilters);
+    sortSelect?.addEventListener('change', applyFilters);
+
+    // load steam prices
+    document.querySelectorAll('.product-card[data-steam-id]').forEach(loadSteamPrice);
+  </script>
+
+</body>
+</html>
