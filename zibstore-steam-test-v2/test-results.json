@@ -1,0 +1,57 @@
+{
+  "captured_from_test_run": "2026-09-11",
+  "note": "Пример реального ответа тестового стенда, зафиксированный по результату проверки в браузере. Не используется сайтом как источник цены.",
+  "tests": [
+    {
+      "key": "doom",
+      "name": "DOOM: The Dark Ages Premium",
+      "digiseller_rub": 1986,
+      "steamType": "package",
+      "steamId": 1221725,
+      "nameFromSteam": "DOOM: The Dark Ages – премиальное издание",
+      "cc": "kz",
+      "currency": "KZT",
+      "final": 42900,
+      "initial": 42900,
+      "final_rub": 8018.3961,
+      "initial_rub": 8018.3961,
+      "discount_percent": 0,
+      "individual": 37998,
+      "fx": {
+        "source": "cbr-xml-daily.ru",
+        "rate": 0.186909,
+        "nominal": 100,
+        "date": "2026-09-12T11:30:00+03:00",
+        "from": "KZT",
+        "to": "RUB"
+      },
+      "steam_url": "https://store.steampowered.com/sub/1221725/"
+    },
+    {
+      "key": "ac",
+      "name": "Assassin's Creed Black Flag Resynced",
+      "digiseller_rub": 3163,
+      "steamType": "app",
+      "steamId": 3751950,
+      "nameFromSteam": null,
+      "cc": "kz",
+      "currency": "KZT",
+      "final": 25499,
+      "initial": 25499,
+      "final_rub": 4765.995291,
+      "initial_rub": 4765.995291,
+      "discount_percent": 0,
+      "individual": null,
+      "fx": {
+        "source": "cbr-xml-daily.ru",
+        "rate": 0.186909,
+        "nominal": 100,
+        "date": "2026-09-12T11:30:00+03:00",
+        "from": "KZT",
+        "to": "RUB"
+      },
+      "steam_url": "https://store.steampowered.com/app/3751950/"
+    }
+  ],
+  "v2_note": "Данные выше — зафиксированный успешный эталонный тест; текущий стенд использует retry/cache для курса ЦБ."
+}
