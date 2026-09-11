@@ -243,6 +243,11 @@
     return STEAM_PRICE_MAP.byName.find(rule => rule.test(name))?.target || null;
   }
 
+  // GitHub Pages — статический хостинг, поэтому Steam API вызывается
+  // через уже работающую Netlify Function на отдельном домене.
+  // Если домен Netlify изменится, меняем только эту строку.
+  const STEAM_API_BASE = 'https://aquamarine-melomakarona-aeed48.netlify.app/.netlify/functions/steam-price';
+
   async function fetchSteamPrice(target) {
     try {
       const params = new URLSearchParams();
@@ -251,7 +256,7 @@
       // KZ — основной регион сравнения для нашего магазина. Сама функция при необходимости
       // сделает fallback на UA -> US и вернёт фактический регион в steam.cc.
       params.set('cc', target.region || 'kz');
-      const res = await fetch(`/.netlify/functions/steam-price?${params.toString()}`);
+      const res = await fetch(`${STEAM_API_BASE}?${params.toString()}`);
       if (!res.ok) throw new Error(`Steam proxy HTTP ${res.status}`);
       return await res.json();
     } catch (err) {
