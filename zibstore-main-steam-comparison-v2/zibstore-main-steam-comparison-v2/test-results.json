@@ -1,0 +1,9 @@
+{
+  "version": "comparison-v2",
+  "changes": [
+    "Steam comparison moved below store price",
+    "Savings badge displayed under store price",
+    "Steam original and RUB-converted price kept in compact secondary line",
+    "Steam package label retained"
+  ]
+}
