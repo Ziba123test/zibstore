@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ЗибСтор — Ключи игр | Честное сравнение цен</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          nox: {
+            bg: '#141111',
+            card: '#1c1816',
+            accent: '#fbbb43',
+            muted: '#9a8f84',
+            border: '#2a2420'
+          }
+        },
+        fontFamily: {
+          display: ['Unbounded', 'system-ui', 'sans-serif'],
+          body: ['Manrope', 'system-ui', 'sans-serif']
+        }
+      }
+    }
+  }
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Unbounded:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  body { font-family: 'Manrope', system-ui, sans-serif; background: #141111; color: #f5f0e8; }
+  .font-display { font-family: 'Unbounded', system-ui, sans-serif; }
+  ::-webkit-scrollbar { height: 8px; width: 8px; }
+  ::-webkit-scrollbar-thumb { background: #2a2420; border-radius: 8px; }
+  .skeleton { background: linear-gradient(90deg, #1c1816 25%, #241f1b 37%, #1c1816 63%); background-size: 400% 100%; animation: shimmer 1.4s ease infinite; }
+  @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
+  select { -webkit-appearance: none; appearance: none; }
+</style>
+</head>
+<body class="min-h-screen bg-nox-bg text-white antialiased">
+
+  <!-- Header -->
+  <header class="sticky top-0 z-50 border-b border-nox-border bg-nox-bg/95 backdrop-blur">
+    <div class="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3 sm:gap-4">
+      <a href="#" class="flex shrink-0 items-center gap-2">
+        <span class="font-display text-xl font-bold tracking-tight text-nox-accent">ЗибСтор</span>
+      </a>
+      <div class="relative min-w-0 flex-1 max-w-xl">
+        <svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-nox-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z"/>
+        </svg>
+        <input
+          id="search-input"
+          type="search"
+          placeholder="Поиск товара..."
+          autocomplete="off"
+          class="w-full rounded-full border border-nox-border bg-nox-card py-2 pl-10 pr-4 text-sm text-white placeholder:text-nox-muted outline-none transition focus:border-nox-accent focus:ring-1 focus:ring-nox-accent/40"
+        />
+      </div>
+      <nav class="hidden shrink-0 items-center gap-4 text-sm sm:flex ml-2 pl-2">
+        <a href="#catalog" class="text-nox-muted hover:text-nox-accent transition">Каталог</a>
+        <a href="#how" class="text-nox-muted hover:text-nox-accent transition">Как купить</a>
+        <a href="https://t.me/" target="_blank" rel="noopener" title="Написать в Telegram" class="text-nox-muted hover:text-nox-accent transition" aria-label="Telegram">
+          <svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221l-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.446 1.394c-.14.18-.357.223-.548.223l.188-2.85 5.18-4.68c.223-.198-.054-.31-.346-.113l-6.4 4.02-2.76-.918c-.6-.187-.612-.6.125-.89l10.782-4.156c.5-.18.94.112.78.89z"/>
+          </svg>
+        </a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <!-- Hero -->
+    <section class="relative overflow-hidden border-b border-nox-border">
+      <div class="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-nox-accent/10 via-transparent to-transparent"></div>
+      <div class="relative mx-auto max-w-6xl px-4 py-12 text-center sm:py-16">
+        <h1 class="font-display text-3xl font-bold tracking-tight text-nox-accent sm:text-5xl">ЗибСтор</h1>
+        <p class="mt-3 mx-auto max-w-md text-lg text-nox-muted sm:text-xl">
+          Честное сравнение цен и удобство сортировки
+        </p>
+        <p class="mx-auto mt-3 max-w-xl text-sm text-nox-muted">
+          Ключи для игр с быстрой выдачей. Оплата через Digiseller · WebMoney, карты, крипта.
+          Регион: Россия и СНГ.
+        </p>
+      </div>
+    </section>
+
+    <!-- Catalog -->
+    <section id="catalog" class="mx-auto max-w-6xl px-4 py-12">
+      <div class="mb-4 flex flex-wrap items-center justify-between gap-4">
+        <h2 class="font-display text-2xl font-bold">Витрина</h2>
+        <div class="flex items-center gap-2 text-sm">
+          <span class="text-nox-muted">Сортировка</span>
+          <select id="sort-select" class="rounded-lg border border-nox-border bg-nox-card px-3 py-2 text-white outline-none focus:border-nox-accent">
+            <option value="popular">Популярное</option>
+            <option value="price">Дешевле</option>
+            <option value="priceDESC">Дороже</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Лента категорий -->
+      <div id="category-strip" class="mb-6 flex flex-wrap gap-2 text-sm">
+        <div class="skeleton h-9 w-16 rounded-full"></div>
+        <div class="skeleton h-9 w-28 rounded-full"></div>
+        <div class="skeleton h-9 w-28 rounded-full"></div>
+        <div class="skeleton h-9 w-32 rounded-full"></div>
+      </div>
+
+      <div id="api-banner" class="hidden mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300"></div>
+
+      <div id="product-grid" class="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4"></div>
+
+      <div id="empty-state" class="hidden rounded-2xl border border-dashed border-nox-border p-10 text-center text-nox-muted">
+        Ничего не нашлось. Попробуйте другую категорию или сбросьте поиск.
+      </div>
+
+      <!-- Pagination -->
+      <div id="pagination" class="mt-8 flex items-center justify-center gap-2 text-sm"></div>
+    </section>
+
+    <!-- How to buy -->
+    <section id="how" class="border-t border-nox-border bg-nox-card/30">
+      <div class="mx-auto max-w-6xl px-4 py-14">
+        <h2 class="font-display text-2xl font-bold">Как купить</h2>
+        <div class="mt-8 grid gap-6 sm:grid-cols-3">
+          <div class="rounded-xl border border-nox-border p-5">
+            <div class="text-2xl font-display text-nox-accent">01</div>
+            <h3 class="mt-2 font-semibold">Выбери игру</h3>
+            <p class="mt-1 text-sm text-nox-muted">Нажми «Купить» — откроется защищённая страница оплаты Digiseller / oplata.info</p>
+          </div>
+          <div class="rounded-xl border border-nox-border p-5">
+            <div class="text-2xl font-display text-nox-accent">02</div>
+            <h3 class="mt-2 font-semibold">Оплати</h3>
+            <p class="mt-1 text-sm text-nox-muted">Карта, WebMoney, СБП, крипта и другие способы. Платежи обрабатывает Digiseller.</p>
+          </div>
+          <div class="rounded-xl border border-nox-border p-5">
+            <div class="text-2xl font-display text-nox-accent">03</div>
+            <h3 class="mt-2 font-semibold">Получи ключ</h3>
+            <p class="mt-1 text-sm text-nox-muted">На email и в личный кабинет Digiseller — обычно в течение нескольких минут.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="border-t border-nox-border py-8 text-center text-xs text-nox-muted">
+    <p class="max-w-3xl mx-auto px-4 leading-relaxed">
+      Этот сайт не был одобрен корпорациями Valve, Electronic Arts, Ubisoft, Blizzard и другими
+      правообладателями и не аффилирован с ними. Названия и логотипы данных корпораций являются
+      товарными знаками соответствующих владельцев. Продажа товаров осуществляется через сервис Digiseller.
+    </p>
+    <p class="mt-3">ЗибСтор · Ключи игр · Россия и СНГ</p>
+  </footer>
+
+  <script>
+  // ----------------------------------------------------------------------
+  // ЗибСтор — каталог через открытый API Digiseller (без встроенного виджета)
+  // Документация: https://my.digiseller.com/inside/api.asp
+  // ----------------------------------------------------------------------
+  const SELLER_ID = 810015;
+  const API_BASE = 'https://api.digiseller.com/api';
+  const CURRENCY = 'RUR';
+  const CURRENCY_SYMBOL = '₽';
+  const PAGE_SIZE = 12;          // товаров на страницу в сетке (клиентская пагинация)
+  const FETCH_ROWS_PER_CAT = 100; // сколько тянем с сервера за раз на категорию
+
+  const state = {
+    categoryId: 'all',
+    categoriesList: [],   // реальные категории с API (без псевдо-"Все")
+    rawProducts: [],      // сырые товары текущей категории/подборки, как пришли с сервера
+    order: 'popular',
+    page: 1,
+    search: ''
+  };
+
+  const grid = document.getElementById('product-grid');
+  const pagEl = document.getElementById('pagination');
+  const emptyEl = document.getElementById('empty-state');
+  const bannerEl = document.getElementById('api-banner');
+  const catStrip = document.getElementById('category-strip');
+
+  // ---- Демо-данные на случай, если запрос к API не прошёл (сеть/CORS) ----
+  const FALLBACK_PRODUCTS = [
+    { id: 'demo-1', name: 'DOOM: The Dark Ages Premium КЛЮЧ STEAM СНГ + РФ', price_rub: 2037, base_price: 2037, has_discount: 0, is_available: 1 },
+    { id: 'demo-2', name: 'Kingdom Come: Deliverance II — Royal (СНГ) КЛЮЧ', price_rub: 1010, base_price: 1010, has_discount: 0, is_available: 1 },
+    { id: 'demo-3', name: 'Red Dead Redemption 2 / Ultimate + подарок', price_rub: 1249, base_price: 1249, has_discount: 0, is_available: 1 },
+    { id: 'demo-4', name: 'The Sims 4 + все дополнения и каталоги', price_rub: 790, base_price: 790, has_discount: 0, is_available: 1 },
+    { id: 'demo-5', name: 'S.T.A.L.K.E.R. 2: Сердце Чернобыля — полное издание', price_rub: 249, base_price: 349, has_discount: 1, is_available: 1 },
+    { id: 'demo-6', name: 'Cyberpunk 2077 & Phantom Liberty Bundle', price_rub: 999, base_price: 1299, has_discount: 1, is_available: 1 }
+  ];
+  const FALLBACK_CATEGORIES = [
+    { id: 101, name: 'Ключи Steam' },
+    { id: 102, name: 'Гифты Steam' },
+    { id: 103, name: 'Пополнение Steam' },
+    { id: 104, name: 'Оффлайн-аккаунты Steam' }
+  ];
+
+  // ---------------- Сравнение с ценой в Steam ----------------
+  // Ручное сопоставление товара ЗибСтор со Steam.
+  // type: app      -> Steam AppID (обычная игра)
+  // type: package  -> Steam Package/SubID (отдельное издание/набор, например DOOM Premium)
+  //
+  // Надёжность: сначала точный Digiseller ID, затем временный fallback по названию.
+  // Когда будут известны реальные ID товаров Digiseller, переносим их в byDigisellerId.
+  const STEAM_PRICE_MAP = {
+    byDigisellerId: {
+      // '1234567': { type: 'package', id: '1221725', label: 'DOOM: The Dark Ages Premium Edition' },
+      // '7654321': { type: 'app', id: '3751950', label: "Assassin's Creed Black Flag Resynced" },
+    },
+    byName: [
+      {
+        test: name => /DOOM\s*:\s*The\s*Dark\s*Ages/i.test(name) && /Premium/i.test(name),
+        target: {
+          type: 'package',
+          id: '1221725',
+          label: 'DOOM: The Dark Ages Premium Edition',
+          region: 'kz'
+        }
+      },
+      {
+        test: name => /Assassin.?s\s+Creed.*Black\s+Flag\s+Resynced/i.test(name),
+        target: {
+          type: 'app',
+          id: '3751950',
+          label: "Assassin's Creed Black Flag Resynced",
+          region: 'kz'
+        }
+      }
+    ]
+  };
+
+  const STEAM_REGION_LABELS = {
+    ru: 'RU', kz: 'KZ', ua: 'UA', us: 'US', de: 'DE', tr: 'TR'
+  };
+
+  function getSteamTarget(product) {
+    const exact = STEAM_PRICE_MAP.byDigisellerId[String(product.id)];
+    if (exact) return exact;
+    const name = String(product.name || '');
+    return STEAM_PRICE_MAP.byName.find(rule => rule.test(name))?.target || null;
+  }
+
+  async function fetchSteamPrice(target) {
+    try {
+      const params = new URLSearchParams();
+      if (target.type === 'package') params.set('packageid', target.id);
+      else params.set('appid', target.id);
+      // KZ — основной регион сравнения для нашего магазина. Сама функция при необходимости
+      // сделает fallback на UA -> US и вернёт фактический регион в steam.cc.
+      params.set('cc', target.region || 'kz');
+      const res = await fetch(`/.netlify/functions/steam-price?${params.toString()}`);
+      if (!res.ok) throw new Error(`Steam proxy HTTP ${res.status}`);
+      return await res.json();
+    } catch (err) {
+      console.warn('Steam price request failed:', target, err);
+      return { available: false, error: err?.message || String(err) };
+    }
+  }
+
+  function formatSteamOriginalPrice(steam) {
+    const value = Number(steam.final);
+    if (!Number.isFinite(value)) return '';
+    return `${value.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ${steam.currency}`;
+  }
+
+  function formatSteamComparisonLabel(steam) {
+    const region = STEAM_REGION_LABELS[steam.cc] || String(steam.cc || '').toUpperCase();
+    return steam.currency === 'RUB' ? `Steam ${region}` : `Steam ${region} · по курсу ЦБ РФ`;
+  }
+
+  async function enhanceWithSteamPrices(products) {
+    const targets = products
+      .map(product => ({ product, target: getSteamTarget(product) }))
+      .filter(x => x.target);
+
+    for (const { product, target } of targets) {
+      const el = document.getElementById(`steam-cmp-${product.id}`);
+      if (!el) continue;
+
+      el.innerHTML = `<span class="text-nox-muted">Проверяем цену Steam…</span>`;
+      el.removeAttribute('title');
+
+      const steam = await fetchSteamPrice(target);
+      if (!steam || !steam.available || typeof steam.final_rub !== 'number') {
+        const reason = steam?.reason === 'no_price_in_tried_regions'
+          ? 'Цена Steam недоступна в проверенных регионах'
+          : 'Steam: цена недоступна';
+        el.innerHTML = `<span class="text-nox-muted">${escapeHtml(reason)}</span>`;
+        continue;
+      }
+
+      const ourPrice = Number(product.price_rub ?? product.price ?? product.base_price);
+      const steamRub = Number(steam.final_rub);
+      if (!Number.isFinite(ourPrice) || !Number.isFinite(steamRub) || steamRub <= 0) {
+        el.innerHTML = `<span class="text-nox-muted">Steam: не удалось сравнить цену</span>`;
+        continue;
+      }
+
+      const diff = ourPrice - steamRub;
+      const storeIsCheaper = diff < 0;
+      const denominator = storeIsCheaper ? steamRub : ourPrice;
+      const pct = Math.round(Math.abs(diff) / denominator * 100);
+      const shownSteamRub = Math.round(steamRub).toLocaleString('ru-RU');
+      const originalPrice = formatSteamOriginalPrice(steam);
+      const comparisonLabel = formatSteamComparisonLabel(steam);
+
+      let verdict = '';
+      if (storeIsCheaper) {
+        verdict = `<span class="font-semibold text-emerald-400">ЗибСтор дешевле на ${pct}%</span>`;
+      } else if (diff > 0) {
+        verdict = `<span class="font-semibold text-amber-400">Steam дешевле на ${pct}%</span>`;
+      } else {
+        verdict = `<span class="font-semibold text-nox-muted">Цена одинаковая</span>`;
+      }
+
+      const foundRegion = STEAM_REGION_LABELS[steam.cc] || String(steam.cc || '').toUpperCase();
+      const requestedRegion = target.region ? (STEAM_REGION_LABELS[target.region] || target.region.toUpperCase()) : null;
+      const fallbackNote = requestedRegion && requestedRegion !== foundRegion
+        ? ` · найдено в ${foundRegion}`
+        : '';
+
+      el.innerHTML = `
+        <div class="text-right">
+          <div class="flex items-center justify-end gap-1.5">
+            <span class="text-[10px] uppercase tracking-wide text-nox-muted">${escapeHtml(comparisonLabel)}</span>
+            ${fallbackNote ? `<span class="text-[9px] text-nox-muted/80">${escapeHtml(fallbackNote.replace(/^ · /, ''))}</span>` : ''}
+          </div>
+          <div class="mt-0.5 text-sm font-semibold text-white">${escapeHtml(originalPrice)}</div>
+          <div class="mt-0.5 text-[11px] text-nox-muted">≈ ${shownSteamRub} ₽</div>
+          <div class="mt-1">${verdict}</div>
+          ${steam.steamType === 'package'
+            ? `<div class="mt-0.5 text-[9px] text-nox-muted/80">Набор</div>`
+            : ''}
+        </div>
+      `;
+
+      if (steam.fx && steam.fx.rate) {
+        const date = steam.fx.date ? ` на ${steam.fx.date}` : '';
+        el.title = `Курс ЦБ РФ${date}: 1 ${steam.currency} = ${Number(steam.fx.rate).toFixed(4)} ₽`;
+      }
+    }
+  }
+
+  function buildUrl(path, params) {
+    const url = new URL(`${API_BASE}/${path}`);
+    url.searchParams.set('seller_id', SELLER_ID);
+    url.searchParams.set('format', 'json');
+    url.searchParams.set('transp', 'cors');
+    Object.entries(params || {}).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, v);
+    });
+    return url.toString();
+  }
+
+  function showBanner(text) {
+    bannerEl.textContent = text;
+    bannerEl.classList.remove('hidden');
+  }
+
+  // ---------------- Категории ----------------
+  async function loadCategories() {
+    let cats = [];
+    try {
+      const res = await fetch(buildUrl('categories'));
+      if (!res.ok) throw new Error('categories request failed');
+      const data = await res.json();
+      cats = (data.category || []).filter(c => c.name);
+    } catch (err) {
+      console.warn('Не удалось получить категории через API, используем демо-список:', err);
+    }
+    if (!cats.length) cats = FALLBACK_CATEGORIES;
+
+    state.categoriesList = cats;
+    renderCategoryStrip();
+    loadProducts();
+  }
+
+  function renderCategoryStrip() {
+    const tabs = [{ id: 'all', name: 'Все' }, ...state.categoriesList];
+    catStrip.innerHTML = tabs.map(c => `
+      <button
+        data-cat-id="${c.id}"
+        class="cat-btn rounded-full px-4 py-2 font-medium transition border ${c.id == state.categoryId ? 'border-nox-accent bg-nox-accent text-nox-bg' : 'border-nox-border text-nox-muted hover:text-white hover:border-white/30'}"
+      >${c.name}</button>
+    `).join('');
+    catStrip.querySelectorAll('.cat-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        state.categoryId = isNaN(btn.dataset.catId) ? btn.dataset.catId : Number(btn.dataset.catId);
+        state.page = 1;
+        loadProducts();
+      });
+    });
+  }
+
+  // ---------------- Загрузка товаров ----------------
+  async function fetchCategoryProducts(categoryId) {
+    const res = await fetch(buildUrl('shop/products', {
+      category_id: categoryId,
+      rows: FETCH_ROWS_PER_CAT,
+      currency: CURRENCY
+    }));
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.retval && Number(data.retval) !== 0) throw new Error(data.retdesc || 'Digiseller API error');
+    return data.product || [];
+  }
+
+  async function fetchAllProducts() {
+    const results = await Promise.allSettled(
+      state.categoriesList.map(c => fetchCategoryProducts(c.id))
+    );
+    const merged = [];
+    const seen = new Set();
+    results.forEach(r => {
+      if (r.status === 'fulfilled') {
+        r.value.forEach(p => {
+          if (!seen.has(p.id)) { seen.add(p.id); merged.push(p); }
+        });
+      }
+    });
+    if (!merged.length && results.every(r => r.status === 'rejected')) {
+      throw results.find(r => r.status === 'rejected').reason;
+    }
+    return merged;
+  }
+
+  async function loadProducts() {
+    renderSkeletons();
+    bannerEl.classList.add('hidden');
+
+    try {
+      const products = state.categoryId === 'all'
+        ? await fetchAllProducts()
+        : await fetchCategoryProducts(state.categoryId);
+      state.rawProducts = products;
+      state.isFallback = false;
+      applyAndRender();
+    } catch (err) {
+      console.warn('API Digiseller недоступен из браузера — показаны демо-данные:', err);
+      showBanner('Не удалось получить каталог напрямую из браузера. Показаны демо-товары — технические детали в консоли браузера (F12).');
+      state.rawProducts = FALLBACK_PRODUCTS;
+      state.isFallback = true;
+      applyAndRender();
+    }
+  }
+
+  // ---------------- Сортировка + пагинация (клиентские, без повторных запросов) ----------------
+  function applySort(products, order) {
+    const list = [...products];
+    switch (order) {
+      case 'price':
+        return list.sort((a, b) => (a.price_rub ?? a.price ?? 0) - (b.price_rub ?? b.price ?? 0));
+      case 'priceDESC':
+        return list.sort((a, b) => (b.price_rub ?? b.price ?? 0) - (a.price_rub ?? a.price ?? 0));
+      case 'popular':
+      default:
+        // Порядок "как в Моём магазине" — то, что вернул сервер без параметра order.
+        return list;
+    }
+  }
+
+  function applyAndRender() {
+    let filtered = state.rawProducts;
+    if (state.search) {
+      const q = state.search.toLowerCase();
+      filtered = filtered.filter(p => p.name.toLowerCase().includes(q));
+    }
+    const sorted = applySort(filtered, state.order);
+
+    const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
+    state.page = Math.min(state.page, totalPages);
+    const pageItems = sorted.slice((state.page - 1) * PAGE_SIZE, state.page * PAGE_SIZE);
+
+    renderProducts(pageItems, { real: !state.isFallback });
+    renderPagination(totalPages);
+  }
+
+  function renderSkeletons() {
+    grid.innerHTML = Array.from({ length: PAGE_SIZE }).map(() => `
+      <div class="rounded-2xl border border-nox-border bg-nox-card overflow-hidden">
+        <div class="skeleton aspect-[3/4]"></div>
+        <div class="p-3 space-y-2">
+          <div class="skeleton h-3 w-full rounded"></div>
+          <div class="skeleton h-3 w-2/3 rounded"></div>
+          <div class="skeleton h-5 w-1/2 rounded mt-2"></div>
+        </div>
+      </div>`).join('');
+    emptyEl.classList.add('hidden');
+  }
+
+  function renderProducts(products, { real }) {
+    if (!products.length) {
+      grid.innerHTML = '';
+      emptyEl.classList.remove('hidden');
+      return;
+    }
+    emptyEl.classList.add('hidden');
+
+    grid.innerHTML = products.map(p => {
+      const price = p.price_rub ?? p.price ?? p.base_price;
+      const oldPrice = p.has_discount == 1 ? (p.base_price ?? p.sale_info?.common_base_price) : null;
+      const buyUrl = real
+        ? `https://www.oplata.info/asp2/pay.asp?id_d=${p.id}&agent=${SELLER_ID}&lang=ru-RU`
+        : '#';
+      return `
+      <div class="group rounded-2xl border border-nox-border bg-nox-card overflow-hidden flex flex-col hover:border-nox-accent/50 transition">
+        <div class="aspect-[3/4] bg-gradient-to-br from-nox-accent/10 to-nox-bg flex items-center justify-center">
+          <span class="font-display text-3xl text-nox-accent/30 px-2 text-center">${escapeHtml(p.name).slice(0, 2).toUpperCase()}</span>
+        </div>
+        <div class="p-3 flex flex-col flex-1">
+          <h3 class="text-sm font-medium leading-snug line-clamp-2 flex-1">${escapeHtml(p.name)}</h3>
+          <div class="mt-2 rounded-xl border border-nox-border bg-black/10 px-3 py-2.5">
+            <div class="grid grid-cols-2 gap-3 items-start">
+              <div class="min-w-0">
+                <div class="text-[10px] uppercase tracking-wide text-nox-muted">Цена у нас</div>
+                <div class="mt-0.5 font-display text-xl font-bold text-nox-accent">${formatNum(price)} ${CURRENCY_SYMBOL}</div>
+                ${oldPrice ? `<div class="mt-0.5 text-[11px] text-nox-muted line-through">${formatNum(oldPrice)} ${CURRENCY_SYMBOL}</div>` : '<div class="mt-0.5 text-[11px] text-transparent select-none">&nbsp;</div>'}
+              </div>
+              ${getSteamTarget(p) ? `
+                <div id="steam-cmp-${p.id}" class="min-w-0 text-right">
+                  <div class="text-[10px] uppercase tracking-wide text-nox-muted">В Steam</div>
+                  <div class="mt-0.5 text-sm font-semibold text-white">Проверяем…</div>
+                </div>
+              ` : `
+                <div class="min-w-0 text-right">
+                  <div class="text-[10px] uppercase tracking-wide text-nox-muted">В Steam</div>
+                  <div class="mt-0.5 text-sm text-nox-muted">—</div>
+                </div>
+              `}
+            </div>
+          </div>
+          <a href="${buyUrl}" target="_blank" rel="noopener"
+             class="mt-3 block text-center rounded-lg bg-nox-accent px-3 py-2 text-sm font-bold text-nox-bg hover:bg-yellow-400 transition ${real ? '' : 'pointer-events-none opacity-60'}">
+            Купить
+          </a>
+        </div>
+      </div>`;
+    }).join('');
+
+    if (real) enhanceWithSteamPrices(products);
+  }
+
+  function renderPagination(totalPages) {
+    if (totalPages <= 1) { pagEl.innerHTML = ''; return; }
+    let html = '';
+    for (let i = 1; i <= totalPages; i++) {
+      if (totalPages > 7 && Math.abs(i - state.page) > 2 && i !== 1 && i !== totalPages) {
+        if (i === 2 || i === totalPages - 1) html += `<span class="text-nox-muted px-1">…</span>`;
+        continue;
+      }
+      html += `<button data-page="${i}" class="page-btn h-8 min-w-8 rounded-lg px-2 text-sm ${i === state.page ? 'bg-nox-accent text-nox-bg font-bold' : 'text-nox-muted hover:bg-nox-card'}">${i}</button>`;
+    }
+    pagEl.innerHTML = html;
+    pagEl.querySelectorAll('.page-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        state.page = Number(btn.dataset.page);
+        applyAndRender();
+        document.getElementById('catalog').scrollIntoView({ behavior: 'smooth' });
+      });
+    });
+  }
+
+  function formatNum(n) {
+    const num = Number(n);
+    if (Number.isNaN(num)) return n;
+    return num.toLocaleString('ru-RU', { maximumFractionDigits: 2 });
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str ?? '';
+    return div.innerHTML;
+  }
+
+  // ---------------- Контролы ----------------
+  document.getElementById('sort-select').addEventListener('change', e => {
+    state.order = e.target.value;
+    state.page = 1;
+    applyAndRender(); // пересортировка без повторного запроса к серверу
+  });
+
+  const searchInput = document.getElementById('search-input');
+  let searchTimer;
+  searchInput.addEventListener('input', e => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      state.search = e.target.value.trim();
+      state.page = 1;
+      applyAndRender();
+    }, 300);
+  });
+  searchInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      document.getElementById('catalog').scrollIntoView({ behavior: 'smooth' });
+    }
+  });
+
+  // ---------------- Старт ----------------
+  loadCategories();
+  </script>
+</body>
+</html>
