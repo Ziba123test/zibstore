@@ -246,7 +246,8 @@
   // GitHub Pages — статический хостинг, поэтому Steam API вызывается
   // через уже работающую Netlify Function на отдельном домене.
   // Если домен Netlify изменится, меняем только эту строку.
-  const STEAM_API_BASE = 'https://aquamarine-melomakarona-aeed48.netlify.app/.netlify/functions/steam-price';
+  // Текущий backend: tubular-raindrop-b709b3.netlify.app
+  const STEAM_API_BASE = 'https://tubular-raindrop-b709b3.netlify.app/.netlify/functions/steam-price';
 
   async function fetchSteamPrice(target) {
     try {
