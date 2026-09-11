@@ -1,0 +1,20 @@
+{
+  "version": "main-steam-integration-v1",
+  "tests": {
+    "doom_premium": {
+      "type": "package",
+      "steam_id": 1221725
+    },
+    "black_flag_resynced": {
+      "type": "app",
+      "steam_id": 3751950
+    }
+  },
+  "default_region": "kz",
+  "fallback_regions": [
+    "ua",
+    "us"
+  ],
+  "price_source": "Steam Store API via Netlify Function",
+  "fx_source": "CBR XML_daily.asp"
+}
