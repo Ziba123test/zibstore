@@ -328,25 +328,19 @@
         ? ` · найдено в ${foundRegion}`
         : '';
 
-      const savingsRub = Math.abs(diff);
-      const savingsText = storeIsCheaper
-        ? `Экономия ${Math.round(savingsRub).toLocaleString('ru-RU')} ₽`
-        : diff > 0
-          ? `Steam дешевле на ${Math.round(savingsRub).toLocaleString('ru-RU')} ₽`
-          : 'Цена одинаковая';
-
       const savingsBadge = storeIsCheaper
         ? `<span class="inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-300">${escapeHtml(`Экономия ${pct}%`)}</span>`
         : diff > 0
           ? `<span class="inline-flex items-center rounded-full bg-amber-500/10 px-2 py-1 text-[11px] font-semibold text-amber-300">${escapeHtml(`Steam дешевле на ${pct}%`)}</span>`
           : `<span class="inline-flex items-center rounded-full bg-white/5 px-2 py-1 text-[11px] font-semibold text-nox-muted">Цена одинаковая</span>`;
 
+      const steamLine = `${escapeHtml(originalPrice)} · ≈ ${shownSteamRub} ₽`;
+      const steamMeta = `Steam${fallbackNote ? escapeHtml(fallbackNote) : ''}`;
+
       el.innerHTML = `
         <div class="min-w-0">
-          <div class="text-[10px] uppercase tracking-wide text-nox-muted">Сравнение со Steam</div>
           <div class="mt-1">${savingsBadge}</div>
-          <div class="mt-2 text-[11px] text-nox-muted">${escapeHtml(comparisonLabel)}${fallbackNote ? escapeHtml(fallbackNote) : ''} · ${escapeHtml(originalPrice)} · ≈ ${shownSteamRub} ₽</div>
-          <div class="mt-0.5 text-[10px] text-nox-muted/80">${escapeHtml(savingsText)}${steam.steamType === 'package' ? ' · набор' : ''}</div>
+          <div class="mt-1.5 text-[11px] text-nox-muted">${steamMeta} · ${steamLine}</div>
         </div>
       `;
 
@@ -534,9 +528,7 @@
                 <div id="steam-cmp-${p.id}" class="mt-2 border-t border-nox-border pt-2">
                   <div class="text-[10px] text-nox-muted">Проверяем цену Steam…</div>
                 </div>
-              ` : `
-                <div class="mt-2 border-t border-nox-border pt-2 text-[10px] text-nox-muted">Steam: сравнение недоступно</div>
-              `}
+              ` : ''}
             </div>
           </div>
           <a href="${buyUrl}" target="_blank" rel="noopener"

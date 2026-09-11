@@ -9,10 +9,10 @@ const CORS = {
 };
 
 const REGIONS = ['kz', 'ua', 'us'];
-const ALLOWED_CC = new Set(['ru', 'kz', 'ua', 'us', 'de', 'tr']);
+const ALLOWED_CC = new Set(['ru', 'kz', 'ua', 'us', 'eu', 'tr']);
 const APP_API = 'https://store.steampowered.com/api/appdetails';
 const PACKAGE_API = 'https://store.steampowered.com/api/packagedetails/';
-const CBR_ARCHIVE_API = 'https://www.cbr.ru/scripts/XML_daily.asp';
+const CBR_API = 'https://www.cbr-xml-daily.ru/daily_json.js';
 
 const reply = (body, status = 200, extra = {}) => new Response(JSON.stringify(body), {
   status,
@@ -82,63 +82,18 @@ async function getPackage(packageid, cc) {
   };
 }
 
-function formatDateReq(date) {
-  const dd = String(date.getDate()).padStart(2, '0');
-  const mm = String(date.getMonth() + 1).padStart(2, '0');
-  const yyyy = date.getFullYear();
-  return `${dd}/${mm}/${yyyy}`;
-}
-
-function moscowToday() {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Europe/Moscow',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  }).formatToParts(new Date());
-  const map = Object.fromEntries(parts.filter(p => p.type !== 'literal').map(p => [p.type, p.value]));
-  return new Date(Number(map.year), Number(map.month) - 1, Number(map.day));
-}
-
-function parseCbrXml(xml, currency) {
-  const rootMatch = xml.match(/<ValCurs[^>]*Date=\"([^\"]+)\"/i);
-  const effectiveDate = rootMatch?.[1] || null;
-  const blockRe = new RegExp(`<Valute[^>]*>[\\s\\S]*?<CharCode>${currency}<\\/CharCode>[\\s\\S]*?<Nominal>(\\d+)<\\/Nominal>[\\s\\S]*?<Value>([0-9,]+)<\\/Value>[\\s\\S]*?<\\/Valute>`, 'i');
-  const m = xml.match(blockRe);
-  if (!m) return null;
-  const nominal = Number(m[1]);
-  const value = Number(m[2].replace(',', '.'));
-  if (!Number.isFinite(nominal) || !Number.isFinite(value) || nominal <= 0) return null;
-  return { rate: value / nominal, date: effectiveDate, nominal };
-}
-
 async function getCbrRate(currency) {
   if (currency === 'RUB') return { rate: 1, date: null, nominal: 1 };
-
-  const today = moscowToday();
-  const errors = [];
-  // Запрашиваем только сегодняшнюю и прошлые даты. Никогда не принимаем
-  // курс на будущую дату, который иногда появляется в daily_json.js заранее.
-  for (let offset = 0; offset <= 7; offset++) {
-    const d = new Date(today);
-    d.setDate(today.getDate() - offset);
-    const dateReq = formatDateReq(d);
-    try {
-      const url = `${CBR_ARCHIVE_API}?date_req=${encodeURIComponent(dateReq)}`;
-      const res = await fetch(url, {
-        headers: { Accept: 'application/xml,text/xml', 'User-Agent': 'ZibStore/1.0 price-comparison' }
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const xml = await res.text();
-      const parsed = parseCbrXml(xml, currency);
-      if (parsed) return parsed;
-      errors.push(`${dateReq}: курс ${currency} не найден`);
-    } catch (err) {
-      errors.push(`${dateReq}: ${err?.message || err}`);
-    }
+  const data = await fetchJson(CBR_API);
+  const v = data?.Valute?.[currency];
+  if (!v || typeof v.Value !== 'number' || typeof v.Nominal !== 'number') {
+    throw new Error(`ЦБ РФ не публикует курс ${currency}`);
   }
-
-  throw new Error(`ЦБ РФ не вернул курс ${currency}. ${errors.join('; ')}`);
+  return {
+    rate: v.Value / v.Nominal,
+    date: data.Date || data.Timestamp || null,
+    nominal: v.Nominal
+  };
 }
 
 export default async (req) => {
@@ -161,13 +116,8 @@ export default async (req) => {
     return reply({ available: false, error: 'Укажите appid или packageid (только числа)' }, 400);
   }
 
-  const requestedRegions = (u.searchParams.get('regions') || '')
-    .split(',')
-    .map(normalizeCc)
-    .filter(Boolean);
   const regions = [];
-  for (const cc of requestedRegions) if (!regions.includes(cc)) regions.push(cc);
-  if (requestedCc && requestedCc !== 'ru' && !regions.includes(requestedCc)) regions.push(requestedCc);
+  if (requestedCc && requestedCc !== 'ru') regions.push(requestedCc);
   for (const cc of REGIONS) if (!regions.includes(cc)) regions.push(cc);
 
   let info = null;
@@ -182,7 +132,7 @@ export default async (req) => {
   }
 
   if (!info) {
-    return reply({ available: false, steamType: type, steamId: Number(id), reason: 'no_price_in_tried_regions', tried_regions: regions, errors }, 200, {
+    return reply({ available: false, steamType: type, steamId: Number(id), reason: 'no_price_in_tried_regions', errors }, 200, {
       'Cache-Control': 'public, max-age=300'
     });
   }
@@ -197,7 +147,7 @@ export default async (req) => {
       finalRub = info.final * cbr.rate;
       initialRub = info.initial == null ? null : info.initial * cbr.rate;
       fx = {
-        source: 'cbr.ru/XML_daily.asp',
+        source: 'cbr-xml-daily.ru',
         rate: cbr.rate,
         nominal: cbr.nominal,
         date: cbr.date,
@@ -222,7 +172,6 @@ export default async (req) => {
     steamType: info.steamType,
     steamId: info.steamId,
     name: info.name,
-    requestedCc: requestedCc,
     cc: info.cc,
     currency: info.currency,
     final: info.final,
