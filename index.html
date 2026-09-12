@@ -364,7 +364,12 @@
   }
 
   function setSteamArtwork(productId, steam) {
-    if (!steam || steam.steamType !== 'app' || !steam.steamId) return;
+    // Некоторые товары из matcher исторически сохранены как package,
+    // хотя их numeric Steam ID фактически является AppID.
+    // Для обложки безопасно пробовать любой числовой steamId:
+    // если это настоящий Package/SubID, CDN просто вернёт ошибку и
+    // сработает цепочка fallback до инициалов.
+    if (!steam || !steam.steamId) return;
     const art = document.getElementById(`steam-art-${productId}`);
     if (!art) return;
 
