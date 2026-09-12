@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <!-- ZibStore frontend v40: coverMode + coverUrl + coverAppId -->
+  <!-- ZibStore frontend v42: automatic cover-quality detection -->
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>ЗибСтор — Ключи игр | Честное сравнение цен</title>
@@ -368,9 +368,9 @@
     return steam.currency === 'RUB' ? `Steam ${region}` : `Steam ${region} · по курсу ЦБ РФ`;
   }
 
-  const COVER_CACHE_VERSION = '3';
+  const COVER_CACHE_VERSION = '6';
 
-  function setSteamArtwork(productId, steam, target = null) {
+  async function setSteamArtwork(productId, steam, target = null) {
     if (!steam || !steam.steamId || !steam.steamType) return;
 
     const art = document.getElementById(`steam-art-${productId}`);
@@ -380,10 +380,21 @@
     const mode = String(target?.coverMode || 'steam').toLowerCase();
     const customUrl = target?.coverUrl ? String(target.coverUrl) : '';
 
+    art.querySelectorAll('[data-cover-quality-badge]').forEach(node => node.remove());
+
+    const showNeedsCover = () => {
+      if (art.querySelector('[data-cover-quality-badge]')) return;
+      const badge = document.createElement('span');
+      badge.dataset.coverQualityBadge = '1';
+      badge.className = 'absolute bottom-2 left-2 z-20 rounded-md border border-amber-400/40 bg-black/85 px-2 py-1 text-[9px] font-black tracking-[0.08em] text-amber-300 shadow-lg backdrop-blur-sm';
+      badge.textContent = 'НУЖНА ОБЛОЖКА';
+      badge.title = 'Steam не отдал нативную вертикальную обложку 600×900. Можно задать coverAppId или coverUrl.';
+      art.appendChild(badge);
+    };
+
     let coverSrc = '';
 
     if (mode === 'custom' && customUrl) {
-      // Absolute URLs are used as-is; relative custom paths are resolved on the storefront origin.
       try {
         coverSrc = new URL(customUrl, window.location.origin).toString();
       } catch (_) {
@@ -406,7 +417,6 @@
     }
 
     const img = document.createElement('img');
-    img.src = coverSrc;
     img.alt = '';
     img.loading = 'lazy';
     img.decoding = 'async';
@@ -422,12 +432,49 @@
     img.addEventListener('error', () => {
       img.remove();
       if (fallback) fallback.classList.remove('hidden');
+      if (mode !== 'custom') showNeedsCover();
     }, { once: true });
 
-    art.querySelectorAll('img[data-steam-cover]').forEach(node => node.remove());
+    art.querySelectorAll('img[data-steam-cover]').forEach(node => {
+      if (node.dataset.objectUrl) URL.revokeObjectURL(node.dataset.objectUrl);
+      node.remove();
+    });
+
     art.style.backgroundImage = 'none';
     art.style.backgroundColor = '#171311';
-    art.prepend(img);
+
+    if (mode === 'custom' && customUrl) {
+      img.src = coverSrc;
+      art.prepend(img);
+      return;
+    }
+
+    try {
+      const res = await fetch(coverSrc, { mode: 'cors', cache: 'default' });
+      if (!res.ok) throw new Error(`cover HTTP ${res.status}`);
+
+      const quality = String(res.headers.get('X-ZibStore-Cover-Quality') || 'unknown').toLowerCase();
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+
+      img.dataset.objectUrl = objectUrl;
+      img.src = objectUrl;
+      art.prepend(img);
+
+      if (quality !== 'native') {
+        showNeedsCover();
+        console.warn('ZibStore: cover needs review', {
+          productId,
+          steamId: steam.steamId,
+          coverAppId: target?.coverAppId || null,
+          quality
+        });
+      }
+    } catch (err) {
+      console.warn('ZibStore cover fetch failed:', productId, err);
+      if (fallback) fallback.classList.remove('hidden');
+      showNeedsCover();
+    }
   }
 
   async function enhanceWithSteamPrices(products) {
@@ -448,7 +495,7 @@
         return;
       }
 
-      setSteamArtwork(product.id, steam, target);
+      await setSteamArtwork(product.id, steam, target);
 
       const ourPrice = Number(product.price_rub ?? product.price ?? product.base_price);
       const steamRub = Number(steam.final_rub);
