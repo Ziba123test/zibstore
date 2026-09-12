@@ -364,65 +364,33 @@
   }
 
   function setSteamArtwork(productId, steam) {
-    // Некоторые товары из matcher исторически сохранены как package,
-    // хотя их numeric Steam ID фактически является AppID.
-    // Для обложки безопасно пробовать любой числовой steamId:
-    // если это настоящий Package/SubID, CDN просто вернёт ошибку и
-    // сработает цепочка fallback до инициалов.
-    if (!steam || !steam.steamId) return;
+    if (!steam || !steam.steamId || !steam.steamType) return;
+
     const art = document.getElementById(`steam-art-${productId}`);
     if (!art) return;
 
-    const appId = encodeURIComponent(String(steam.steamId));
-    // First prefer the exact artwork URLs returned by Steam appdetails.
-    // These include the content hash and therefore work for games whose
-    // predictable CDN paths return 404.
-    const sources = [
-      // Для 16:9 карточек сначала используем точные горизонтальные изображения Steam.
-      steam.header_image,
-      steam.capsule_image,
-      steam.capsule_imagev5,
-      `https://cdn.akamai.steamstatic.com/steam/apps/${appId}/header.jpg`,
-      `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/capsule_616x353.jpg`,
-      // Вертикальная библиотечная обложка остаётся последним запасным вариантом.
-      `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`
-    ].filter(Boolean);
     const fallback = art.querySelector('[data-art-fallback]');
+    const coverUrl = `https://api.zibstore.ru/api/cover?steamType=${encodeURIComponent(steam.steamType)}&steamId=${encodeURIComponent(steam.steamId)}`;
 
     const img = document.createElement('img');
-    let sourceIndex = 0;
-
+    img.src = coverUrl;
     img.alt = '';
     img.loading = 'lazy';
     img.referrerPolicy = 'no-referrer';
-    img.className = 'h-full w-full opacity-0 transition-opacity duration-300';
+    img.className = 'h-full w-full object-cover opacity-0 transition-opacity duration-300';
 
     img.addEventListener('load', () => {
-      // Steam чаще всего гарантированно отдаёт горизонтальные header/capsule.
-      // Поэтому вся витрина использует единый 16:9 кадр: горизонтальные картинки
-      // ложатся естественно, а вертикальные постеры аккуратно кадрируются.
-      art.style.backgroundImage = 'none';
-      art.style.backgroundColor = '#171311';
-      img.classList.add('object-cover');
-      img.style.width = '100%';
-      img.style.height = '100%';
-      img.style.padding = '0';
-
       img.classList.remove('opacity-0');
       if (fallback) fallback.classList.add('hidden');
     });
 
     img.addEventListener('error', () => {
-      sourceIndex += 1;
-      if (sourceIndex >= sources.length) {
-        img.remove();
-        if (fallback) fallback.classList.remove('hidden');
-        return;
-      }
-      img.src = sources[sourceIndex];
+      img.remove();
+      if (fallback) fallback.classList.remove('hidden');
     });
 
-    img.src = sources[sourceIndex];
+    art.style.backgroundImage = 'none';
+    art.style.backgroundColor = '#171311';
     art.prepend(img);
   }
 
