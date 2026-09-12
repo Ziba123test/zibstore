@@ -105,14 +105,23 @@ async function withRub(info) {
 
 async function findPrice(type, id, requestedCc = 'ru') {
   const order = [requestedCc, ...REGION_ORDER.filter(r => r !== requestedCc)];
+  // Some matcher entries were historically saved as package while the Steam ID
+  // is actually an AppID (for example R.E.P.O., Dawnwalker, Slay the Spire 2).
+  // Keep the user's preferred type first, but safely try the alternate endpoint
+  // if the preferred lookup returns no price.
+  const types = type === 'package' ? ['package', 'app'] : ['app', 'package'];
 
   for (const cc of order) {
-    try {
-      const info = type === 'package'
-        ? await getPackagePrice(id, cc)
-        : await getAppPrice(id, cc);
-      if (info) return await withRub(info);
-    } catch (_) {}
+    for (const lookupType of types) {
+      try {
+        const info = lookupType === 'package'
+          ? await getPackagePrice(id, cc)
+          : await getAppPrice(id, cc);
+        if (info) {
+          return await withRub(info);
+        }
+      } catch (_) {}
+    }
   }
   return null;
 }
