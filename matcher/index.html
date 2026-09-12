@@ -62,17 +62,21 @@
       <button id="close" class="text-2xl muted hover:text-white">×</button>
     </div>
 
-    <div class="mt-5 grid gap-3 md:grid-cols-[1fr_auto]">
-      <input id="searchTerm" class="rounded-xl bg-[#141111] border border-[#2a2420] px-4 py-3 outline-none focus:border-[#fbbb43]" />
-      <button id="searchBtn" class="btn rounded-xl px-5 py-3 font-semibold">Найти в Steam</button>
+    <div id="autoSearchBlock">
+      <div class="mt-5 grid gap-3 md:grid-cols-[1fr_auto]">
+        <input id="searchTerm" class="rounded-xl bg-[#141111] border border-[#2a2420] px-4 py-3 outline-none focus:border-[#fbbb43]" />
+        <button id="searchBtn" class="btn rounded-xl px-5 py-3 font-semibold">Найти в Steam</button>
+      </div>
+      <div class="text-xs muted mt-2">Для обычных игр система очищает название от Gift/Ключ/региона и пробует несколько вариантов поиска.</div>
     </div>
 
+    <div id="searchHint" class="mt-4 hidden rounded-xl border border-[#2a2420] bg-[#141111] p-3 text-sm"></div>
     <div id="candidates" class="mt-5 space-y-3"></div>
 
-    <div class="mt-6 border-t border-[#2a2420] pt-5">
-      <div class="font-semibold">Не нашёлся правильный вариант?</div>
-      <div class="text-sm muted mt-1">Для Premium/Deluxe/Bundle можно указать ID вручную.</div>
-      <div class="grid sm:grid-cols-[140px_1fr_auto] gap-3 mt-3">
+    <div id="manualBlock" class="mt-6 border-t border-[#2a2420] pt-5">
+      <div class="font-semibold">Ручное сопоставление</div>
+      <div id="manualDescription" class="text-sm muted mt-1">Для Bundle/Premium/Deluxe и других сложных изданий можно указать Steam ID вручную.</div>
+      <div class="grid sm:grid-cols-[160px_1fr_auto] gap-3 mt-3">
         <select id="manualType" class="rounded-xl bg-[#141111] border border-[#2a2420] px-3 py-3">
           <option value="app">AppID</option>
           <option value="package">Package/SubID</option>
@@ -97,7 +101,54 @@ function loadMap(){ try{return JSON.parse(localStorage.getItem(STORAGE_KEY)||'{}
 function saveMap(){localStorage.setItem(STORAGE_KEY,JSON.stringify(state.map))}
 function esc(s){return String(s??'').replace(/[&<>'"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[m]))}
 function price(p){return Number(p.price_rub ?? p.price ?? p.base_price ?? 0)}
-function cleanTerm(name){return String(name||'').replace(/[✅⭐🔥⚡🎁💎]/g,' ').replace(/\b(STEAM|GIFT|КЛЮЧ|KEY|GLOBAL|СНГ|РФ|RU|KZ|UA|BY)\b/gi,' ').replace(/\s+/g,' ').trim().slice(0,90)}
+function normalizeSearchText(value){
+  return String(value||'')
+    .replace(/[✅⭐🔥⚡🎁💎©®™]/g,' ')
+    .replace(/[«»“”"']/g,' ')
+    .replace(/\[[^\]]*\]/g,' ')
+    .replace(/\([^)]*\)/g,' ')
+    .replace(/\{[^}]*\}/g,' ')
+    .replace(/\b(STEAM|GIFT|KEY|КЛЮЧ|GLOBAL|СНГ|РФ|RU|KZ|UA|BY|ВЕСЬ\s*МИР|WORLDWIDE|WORLD|REGION|РЕГИОН)\b/gi,' ')
+    .replace(/\s*[\/|]+\s*/g,' ')
+    .replace(/\s*[–—-]\s*/g,' ')
+    .replace(/\s+/g,' ')
+    .trim();
+}
+
+function cleanTerm(name){
+  const original=String(name||'').trim();
+  const withoutMeta=original.replace(/\([^)]*\)/g,' ').replace(/\[[^\]]*\]/g,' ');
+  const cleaned=normalizeSearchText(withoutMeta);
+  return (cleaned || normalizeSearchText(original)).slice(0,90);
+}
+
+function buildSearchVariants(name){
+  const cleaned=cleanTerm(name);
+  const compact=normalizeSearchText(name);
+  const variants=[];
+  const add=(v)=>{
+    const q=String(v||'').trim();
+    if(q.length>=2 && !variants.includes(q)) variants.push(q.slice(0,90));
+  };
+  add(cleaned);
+  add(compact);
+
+  const words=cleaned.split(/\s+/).filter(Boolean);
+  for(const count of [6,5,4,3,2]){
+    if(words.length>=count) add(words.slice(0,count).join(' '));
+  }
+  return variants;
+}
+
+function isManualProduct(name){
+  const s=String(name||'').toLowerCase();
+  // Издания, где автоматический поиск чаще всего может выбрать не тот SKU.
+  return /\b(bundle|бандл|collection|коллекци|pack|пакет|premium|премиум|deluxe|делюкс|ultimate|complete|полное\s+издание|upgrade|расширен)/i.test(s);
+}
+
+function steamSearchUrl(term){
+  return `https://store.steampowered.com/search/?term=${encodeURIComponent(cleanTerm(term))}`;
+}
 
 function render(){
   const q=$('filter').value.trim().toLowerCase();
@@ -148,30 +199,82 @@ function demoProducts(){return [
 
 function openModal(id){
   const p=state.products.find(x=>String(x.id)===String(id)); if(!p)return;
-  state.active=p;$('modal').classList.remove('hidden');$('modalTitle').textContent=p.name;$('modalMeta').textContent=`Digiseller ID ${p.id} · ${price(p).toLocaleString('ru-RU')} ₽`;
-  $('searchTerm').value=cleanTerm(p.name);$('candidates').innerHTML='';$('manualId').value='';
+  state.active=p;
+  $('modal').classList.remove('hidden');
+  $('modalTitle').textContent=p.name;
+  $('modalMeta').textContent=`Digiseller ID ${p.id} · ${price(p).toLocaleString('ru-RU')} ₽`;
+  $('searchTerm').value=cleanTerm(p.name);
+  $('candidates').innerHTML='';
+  $('manualId').value='';
+  $('searchHint').classList.add('hidden');
+
+  const manual=isManualProduct(p.name);
+  $('manualBlock').classList.toggle('hidden', !manual);
+  $('autoSearchBlock').classList.toggle('hidden', manual);
+  if(manual){
+    $('searchHint').className='mt-4 rounded-xl border border-[#2a2420] bg-[#141111] p-3 text-sm';
+    $('searchHint').innerHTML='<span class="accent font-semibold">Сложное издание:</span> для этого товара лучше указать AppID или Package/SubID вручную, чтобы не привязать неправильный Steam SKU.';
+    $('searchHint').classList.remove('hidden');
+    return;
+  }
+  $('manualBlock').classList.remove('hidden');
   doSearch();
 }
 function closeModal(){ $('modal').classList.add('hidden');state.active=null }
 
 async function doSearch(){
-  const term=$('searchTerm').value.trim();
-  if(!term)return;
+  const typed=$('searchTerm').value.trim();
+  if(!typed)return;
   $('candidates').innerHTML='<div class="muted">Ищем варианты в Steam…</div>';
+
   try{
-    const r=await fetch(`${STEAM_API}?action=search&term=${encodeURIComponent(term)}&cc=kz`);
-    const d=await r.json();
-    if(!d.items?.length){$('candidates').innerHTML='<div class="text-amber-300">Ничего не найдено. Попробуй упростить запрос или укажи ID вручную.</div>';return}
-    $('candidates').innerHTML=d.items.map(item=>`
+    const queries=buildSearchVariants(typed);
+    const results=[];
+    const seen=new Set();
+
+    for(const query of queries){
+      const r=await fetch(`${STEAM_API}?action=search&term=${encodeURIComponent(query)}&cc=kz`);
+      if(!r.ok) continue;
+      const d=await r.json();
+      for(const item of (d.items||[])){
+        const key=`${item.type||'app'}:${item.id}`;
+        if(seen.has(key)) continue;
+        seen.add(key);
+        results.push({...item, matchedQuery:query});
+      }
+      // Если первый хороший запрос уже дал результаты, всё равно делаем
+      // второй более короткий запрос для случаев с вариациями названий/изданий.
+      if(results.length>=8 && results.some(x => x.name && normalizeSearchText(x.name).toLowerCase() === normalizeSearchText(queries[0]).toLowerCase())) break;
+    }
+
+    if(!results.length){
+      $('candidates').innerHTML=`<div class="text-amber-300">Ничего не найдено через автоматический поиск.</div><a href="${steamSearchUrl(typed)}" target="_blank" rel="noopener" class="inline-block mt-2 btn rounded-xl px-4 py-2 font-semibold">Открыть поиск Steam ↗</a>`;
+      $('manualBlock').classList.remove('hidden');
+      return;
+    }
+
+    $('candidates').innerHTML=results.slice(0,12).map(item=>`
       <button data-type="${esc(item.type==='sub'?'package':'app')}" data-steamid="${esc(item.id)}" class="candidate w-full text-left panel rounded-xl p-3 border border-[#2a2420] transition">
         <div class="flex gap-3 items-center">
           ${item.imageUrl?`<img src="${esc(item.imageUrl)}" class="w-28 h-12 object-cover rounded-md bg-black/30" alt="">`:''}
-          <div class="min-w-0 flex-1"><div class="font-semibold">${esc(item.name)}</div><div class="text-xs muted mt-1">${esc(item.type==='sub'?'Package / SubID':'AppID')} · ${esc(item.id)}${item.price?.final!=null?` · ${esc(item.price.final/100)} ${esc(item.price.currency)}`:''}</div></div>
+          <div class="min-w-0 flex-1">
+            <div class="font-semibold">${esc(item.name)}</div>
+            <div class="text-xs muted mt-1">
+              ${esc(item.type==='sub'?'Package / SubID':'AppID')} · ${esc(item.id)}
+              ${item.price?.final!=null?` · ${esc(item.price.final/100)} ${esc(item.price.currency)}`:''}
+            </div>
+          </div>
           <span class="text-xs accent font-semibold">Выбрать</span>
         </div>
       </button>`).join('');
+
     document.querySelectorAll('.candidate').forEach(b=>b.onclick=()=>saveMatch(b.dataset.type,b.dataset.steamid));
-  }catch(e){$('candidates').innerHTML='<div class="text-red-400">Не удалось выполнить поиск Steam. Backend поиска недоступен.</div>';console.error(e)}
+  }catch(e){
+    const term=typed;
+    $('candidates').innerHTML=`<div class="text-red-400">Автопоиск Steam сейчас недоступен.</div><div class="text-sm muted mt-2">Можно открыть поиск Steam по очищенному названию или указать AppID/Package/SubID вручную.</div><a href="${steamSearchUrl(term)}" target="_blank" rel="noopener" class="inline-block mt-3 btn rounded-xl px-4 py-2 font-semibold">Открыть поиск Steam ↗</a>`;
+    $('manualBlock').classList.remove('hidden');
+    console.error(e)
+  }
 }
 
 function saveMatch(type,id){
