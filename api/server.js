@@ -184,10 +184,8 @@ async function resolvePackageAppId(packageId) {
 }
 
 async function getAppArtwork(appId) {
-  // Artwork metadata is not price data. Some apps return success:false when
-  // appdetails is queried with cc=ru even though their Steam page/artwork exists.
-  // Therefore artwork lookup tries several storefront regions independently
-  // of the RU-first pricing logic.
+  // Product covers should use key art, not arbitrary gameplay screenshots.
+  // Artwork lookup stays independent from pricing regions.
   let exact = {};
 
   for (const cc of ['us', 'kz', 'ru']) {
@@ -203,34 +201,29 @@ async function getAppArtwork(appId) {
     } catch (_) {}
   }
 
-  const screenshotUrls = Array.isArray(exact.screenshots)
-    ? exact.screenshots.flatMap(x => [x?.path_full, x?.path_thumbnail])
-    : [];
-
   const portraitUrls = [
     `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`,
     `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`
   ];
 
-  const gameSpecificUrls = [
-    ...screenshotUrls,
-    exact.background_raw,
-    exact.background,
+  const keyArtUrls = [
+    exact.header_image,
     exact.capsule_image,
     exact.capsule_imagev5,
-    exact.header_image
+    exact.background_raw,
+    exact.background
   ];
 
-  // 1) Prefer a real portrait.
+  // 1) Prefer a true vertical Steam library poster.
   let found = await fetchFirstImage(portraitUrls);
   if (found) return found;
 
-  // 2) Use canonical artwork/screenshots returned by Steam appdetails.
-  found = await fetchFirstImage(gameSpecificUrls);
+  // 2) Otherwise use official key art only.
+  found = await fetchFirstImage(keyArtUrls);
   if (found) return found;
 
-  // 3) Store-page fallback across multiple storefront regions.
-  // Only accept URLs clearly tied to this AppID; generic Steam assets are rejected.
+  // 3) Store-page fallback. Accept only app-specific key-art style URLs.
+  // Screenshots are intentionally excluded.
   for (const cc of ['us', 'kz', 'ru']) {
     try {
       const html = await fetchText(
@@ -246,7 +239,8 @@ async function getAppArtwork(appId) {
           /\/public\/images\//i.test(s) ||
           /steam_logo|logo_steam|steamlogo|default|placeholder/i.test(s)
         );
-        return belongsToApp && !generic;
+        const screenshotLike = /screenshots|ss_[a-f0-9]+/i.test(s);
+        return belongsToApp && !generic && !screenshotLike;
       });
 
       found = await fetchFirstImage(pageImages);
@@ -264,34 +258,47 @@ async function normalizeCover(sourceBuffer) {
   if (!width || !height) throw new Error('Invalid source image');
 
   const ratio = width / height;
+
+  // Native portrait artwork: use it directly as a 2:3 cover.
   if (ratio <= 0.9) {
-    // Real portrait artwork: fill the 2:3 poster directly.
     return sharp(sourceBuffer)
       .resize(600, 900, { fit: 'cover', position: 'centre' })
-      .webp({ quality: 88 })
+      .webp({ quality: 90 })
       .toBuffer();
   }
 
-  // Landscape artwork: make a real 600x900 poster server-side.
-  // The background is a darkened/blurred crop; the original art is centered uncut.
+  // Landscape/square key art:
+  // one coherent 600x900 poster = dark blurred background + centered full key art.
   const background = await sharp(sourceBuffer)
     .resize(600, 900, { fit: 'cover', position: 'centre' })
-    .blur(26)
-    .modulate({ brightness: 0.48, saturation: 0.92 })
-    .webp({ quality: 80 })
+    .blur(30)
+    .modulate({ brightness: 0.38, saturation: 0.86 })
+    .webp({ quality: 82 })
     .toBuffer();
 
   const foreground = await sharp(sourceBuffer)
-    .resize(552, 620, {
-      fit: 'inside',
-      withoutEnlargement: false
+    .resize(540, 360, {
+      fit: 'contain',
+      background: { r: 0, g: 0, b: 0, alpha: 0 }
     })
-    .webp({ quality: 92 })
+    .png()
     .toBuffer();
 
+  const panel = await sharp({
+    create: {
+      width: 570,
+      height: 390,
+      channels: 4,
+      background: { r: 10, g: 10, b: 12, alpha: 0.62 }
+    }
+  }).png().toBuffer();
+
   return sharp(background)
-    .composite([{ input: foreground, gravity: 'center' }])
-    .webp({ quality: 88 })
+    .composite([
+      { input: panel, top: 255, left: 15 },
+      { input: foreground, top: 270, left: 30 }
+    ])
+    .webp({ quality: 90 })
     .toBuffer();
 }
 
