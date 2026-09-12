@@ -192,71 +192,59 @@ async function getAppArtwork(appId) {
     exact = data?.[String(appId)]?.success ? (data[String(appId)].data || {}) : {};
   } catch (_) {}
 
-  // Canonical app-specific artwork returned by Steam.
   const screenshotUrls = Array.isArray(exact.screenshots)
     ? exact.screenshots.flatMap(x => [x?.path_full, x?.path_thumbnail])
     : [];
 
-  const moviePosterUrls = Array.isArray(exact.movies)
-    ? exact.movies.flatMap(x => [
-        x?.thumbnail,
-        x?.webm?.max,
-        x?.webm?.['480'],
-        x?.mp4?.max,
-        x?.mp4?.['480']
-      ])
-    : [];
-
-  const exactUrls = [
-    exact.header_image,
-    exact.capsule_image,
-    exact.capsule_imagev5,
-    exact.background_raw,
-    exact.background,
-    ...screenshotUrls,
-    ...moviePosterUrls
-  ];
-
-  const guessedPortrait = [
+  const portraitUrls = [
     `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`,
     `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`
   ];
 
-  const guessedLandscape = [
-    `https://cdn.akamai.steamstatic.com/steam/apps/${appId}/header.jpg`,
-    `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/capsule_616x353.jpg`
+  // Prefer clearly game-specific artwork. We intentionally do NOT trust
+  // header_image first: for some unreleased/new apps Steam returns its generic
+  // placeholder there, which is the gray Steam-logo image seen on the storefront.
+  const gameSpecificUrls = [
+    ...screenshotUrls,
+    exact.background_raw,
+    exact.background,
+    exact.capsule_image,
+    exact.capsule_imagev5
   ];
 
-  // 1) Prefer a real portrait when Steam exposes one.
-  let found = await fetchFirstImage(guessedPortrait);
+  // 1) Real portrait if available.
+  let found = await fetchFirstImage(portraitUrls);
   if (found) return found;
 
-  // 2) Then use canonical artwork/screenshots from appdetails.
-  found = await fetchFirstImage(exactUrls);
+  // 2) Screenshots/background/capsules from this exact AppID.
+  found = await fetchFirstImage(gameSpecificUrls);
   if (found) return found;
 
-  // 3) Common app-specific CDN paths.
-  found = await fetchFirstImage(guessedLandscape);
-  if (found) return found;
-
-  // 4) Last resort: scrape the store page, but ONLY accept URLs that are
-  // clearly tied to this AppID. This prevents the generic Steam logo from
-  // becoming a product cover.
+  // 3) Scrape the official store page, but only accept app-specific CDN URLs
+  // and reject obvious generic/public Steam assets.
   try {
     const html = await fetchText(
       `https://store.steampowered.com/app/${appId}/?l=english&cc=ru`
     );
     const pageImages = extractSteamPageImages(html).filter(url => {
       const s = String(url || '');
-      return (
+      const belongsToApp = (
         s.includes(`/steam/apps/${appId}/`) ||
         s.includes(`/store_item_assets/steam/apps/${appId}/`)
       );
+      const generic = (
+        /\/public\/images\//i.test(s) ||
+        /steam_logo|logo_steam|steamlogo|default|placeholder/i.test(s)
+      );
+      return belongsToApp && !generic;
     });
+
     found = await fetchFirstImage(pageImages);
     if (found) return found;
   } catch (_) {}
 
+  // Do not fall back to header_image blindly. A missing image is better than
+  // showing Steam's generic logo as if it were the game's cover.
   return null;
 }
 
@@ -323,7 +311,7 @@ function sendCover(res, buffer) {
     'Access-Control-Allow-Origin': '*',
     'Content-Type': 'image/webp',
     'Content-Length': buffer.length,
-    'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800'
+    'Cache-Control': 'public, max-age=3600, stale-while-revalidate=86400'
   });
   res.end(buffer);
 }
