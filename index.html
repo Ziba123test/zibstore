@@ -370,7 +370,7 @@
     if (!art) return;
 
     const fallback = art.querySelector('[data-art-fallback]');
-    const coverUrl = `https://api.zibstore.ru/api/cover?steamType=${encodeURIComponent(steam.steamType)}&steamId=${encodeURIComponent(steam.steamId)}`;
+    const coverUrl = `https://api.zibstore.ru/api/cover?steamType=${encodeURIComponent(steam.steamType)}&steamId=${encodeURIComponent(steam.steamId)}&v=3`;
 
     const img = document.createElement('img');
     img.src = coverUrl;
@@ -621,7 +621,7 @@
         : '#';
       return `
       <div class="group rounded-2xl border border-nox-border bg-nox-card overflow-hidden flex flex-col hover:border-nox-accent/50 transition">
-        <div id="steam-art-${p.id}" class="relative aspect-[3/4] overflow-hidden bg-gradient-to-br from-nox-accent/10 to-nox-bg flex items-center justify-center">
+        <div id="steam-art-${p.id}" class="relative aspect-[2/3] overflow-hidden bg-gradient-to-br from-nox-accent/10 to-nox-bg flex items-center justify-center">
           <span data-art-fallback class="font-display text-3xl text-nox-accent/30 px-2 text-center">${escapeHtml(p.name).slice(0, 2).toUpperCase()}</span>
         </div>
         <div class="p-3 flex flex-col flex-1">
