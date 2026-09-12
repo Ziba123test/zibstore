@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <!-- ZibStore frontend v38: unified synthesized posters; cover cache rev 5 -->
+  <!-- ZibStore frontend v40: coverMode + coverUrl + coverAppId -->
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>ЗибСтор — Ключи игр | Честное сравнение цен</title>
@@ -321,9 +321,10 @@
         type: saved.type === 'package' ? 'package' : 'app',
         id: String(saved.steamId),
         label: saved.title || product.name,
-        // Optional AppID used only for artwork. Useful for packages/bundles
-        // whose price must stay tied to a Package/SubID.
+        // Optional artwork overrides.
         coverAppId: saved.coverAppId ? String(saved.coverAppId) : null,
+        coverUrl: saved.coverUrl ? String(saved.coverUrl) : null,
+        coverMode: saved.coverMode ? String(saved.coverMode) : 'steam',
         // Российский регион всегда первый; старое поле region из matcher игнорируем.
         region: 'ru'
       };
@@ -367,7 +368,7 @@
     return steam.currency === 'RUB' ? `Steam ${region}` : `Steam ${region} · по курсу ЦБ РФ`;
   }
 
-  const COVER_CACHE_VERSION = '5';
+  const COVER_CACHE_VERSION = '3';
 
   function setSteamArtwork(productId, steam, target = null) {
     if (!steam || !steam.steamId || !steam.steamType) return;
@@ -376,20 +377,36 @@
     if (!art) return;
 
     const fallback = art.querySelector('[data-art-fallback]');
-    const coverUrl = new URL('https://api.zibstore.ru/api/cover');
-    const coverAppId = target?.coverAppId ? String(target.coverAppId) : null;
-    if (coverAppId) {
-      // Price can come from a package/bundle while artwork comes from its main app.
-      coverUrl.searchParams.set('steamType', 'app');
-      coverUrl.searchParams.set('steamId', coverAppId);
+    const mode = String(target?.coverMode || 'steam').toLowerCase();
+    const customUrl = target?.coverUrl ? String(target.coverUrl) : '';
+
+    let coverSrc = '';
+
+    if (mode === 'custom' && customUrl) {
+      // Absolute URLs are used as-is; relative custom paths are resolved on the storefront origin.
+      try {
+        coverSrc = new URL(customUrl, window.location.origin).toString();
+      } catch (_) {
+        coverSrc = customUrl;
+      }
     } else {
-      coverUrl.searchParams.set('steamType', steam.steamType);
-      coverUrl.searchParams.set('steamId', String(steam.steamId));
+      const coverUrl = new URL('https://api.zibstore.ru/api/cover');
+      const coverAppId = target?.coverAppId ? String(target.coverAppId) : null;
+
+      if (coverAppId) {
+        coverUrl.searchParams.set('steamType', 'app');
+        coverUrl.searchParams.set('steamId', coverAppId);
+      } else {
+        coverUrl.searchParams.set('steamType', steam.steamType);
+        coverUrl.searchParams.set('steamId', String(steam.steamId));
+      }
+
+      coverUrl.searchParams.set('cv', COVER_CACHE_VERSION);
+      coverSrc = coverUrl.toString();
     }
-    coverUrl.searchParams.set('cv', COVER_CACHE_VERSION);
 
     const img = document.createElement('img');
-    img.src = coverUrl.toString();
+    img.src = coverSrc;
     img.alt = '';
     img.loading = 'lazy';
     img.decoding = 'async';
