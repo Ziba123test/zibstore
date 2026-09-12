@@ -184,10 +184,30 @@ async function resolvePackageAppId(packageId) {
 }
 
 async function getAppArtwork(appId) {
-  // Product covers should use key art, not arbitrary gameplay screenshots.
-  // Artwork lookup stays independent from pricing regions.
-  let exact = {};
+  // 1) Native portrait is ideal.
+  const portraitUrls = [
+    `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`,
+    `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`
+  ];
+  let portrait = await fetchFirstImage(portraitUrls);
+  if (portrait) return { kind: 'portrait', image: portrait };
 
+  // 2) If Steam has no portrait, build one from Steam's own library hero + logo.
+  const heroUrls = [
+    `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_hero.jpg`,
+    `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/library_hero.jpg`
+  ];
+  const logoUrls = [
+    `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/logo.png`,
+    `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/logo.png`
+  ];
+
+  const hero = await fetchFirstImage(heroUrls);
+  const logo = await fetchFirstImage(logoUrls);
+  if (hero) return { kind: 'hero', image: hero, logo };
+
+  // 3) Official key art via appdetails, region-independent from pricing.
+  let exact = {};
   for (const cc of ['us', 'kz', 'ru']) {
     try {
       const data = await fetchJson(
@@ -201,11 +221,6 @@ async function getAppArtwork(appId) {
     } catch (_) {}
   }
 
-  const portraitUrls = [
-    `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`,
-    `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`
-  ];
-
   const keyArtUrls = [
     exact.header_image,
     exact.capsule_image,
@@ -213,17 +228,10 @@ async function getAppArtwork(appId) {
     exact.background_raw,
     exact.background
   ];
+  let keyArt = await fetchFirstImage(keyArtUrls);
+  if (keyArt) return { kind: 'keyart', image: keyArt };
 
-  // 1) Prefer a true vertical Steam library poster.
-  let found = await fetchFirstImage(portraitUrls);
-  if (found) return found;
-
-  // 2) Otherwise use official key art only.
-  found = await fetchFirstImage(keyArtUrls);
-  if (found) return found;
-
-  // 3) Store-page fallback. Accept only app-specific key-art style URLs.
-  // Screenshots are intentionally excluded.
+  // 4) Final page fallback: app-specific non-screenshot Steam artwork only.
   for (const cc of ['us', 'kz', 'ru']) {
     try {
       const html = await fetchText(
@@ -242,62 +250,103 @@ async function getAppArtwork(appId) {
         const screenshotLike = /screenshots|ss_[a-f0-9]+/i.test(s);
         return belongsToApp && !generic && !screenshotLike;
       });
-
-      found = await fetchFirstImage(pageImages);
-      if (found) return found;
+      keyArt = await fetchFirstImage(pageImages);
+      if (keyArt) return { kind: 'keyart', image: keyArt };
     } catch (_) {}
   }
 
   return null;
 }
 
-async function normalizeCover(sourceBuffer) {
-  const meta = await sharp(sourceBuffer).metadata();
-  const width = Number(meta.width || 0);
-  const height = Number(meta.height || 0);
-  if (!width || !height) throw new Error('Invalid source image');
+async function normalizeCover(artwork) {
+  if (!artwork?.image?.buffer) throw new Error('Missing artwork image');
 
-  const ratio = width / height;
+  const sourceBuffer = artwork.image.buffer;
 
-  // Native portrait artwork: use it directly as a 2:3 cover.
-  if (ratio <= 0.9) {
+  if (artwork.kind === 'portrait') {
     return sharp(sourceBuffer)
       .resize(600, 900, { fit: 'cover', position: 'centre' })
       .webp({ quality: 90 })
       .toBuffer();
   }
 
-  // Landscape/square key art:
-  // one coherent 600x900 poster = dark blurred background + centered full key art.
+  if (artwork.kind === 'hero') {
+    const background = await sharp(sourceBuffer)
+      .resize(600, 900, { fit: 'cover', position: 'centre' })
+      .modulate({ brightness: 0.72, saturation: 1.03 })
+      .webp({ quality: 88 })
+      .toBuffer();
+
+    const gradient = Buffer.from(
+      `<svg width="600" height="900" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#000" stop-opacity=".22"/>
+            <stop offset="52%" stop-color="#000" stop-opacity="0"/>
+            <stop offset="100%" stop-color="#000" stop-opacity=".58"/>
+          </linearGradient>
+        </defs>
+        <rect width="600" height="900" fill="url(#g)"/>
+      </svg>`
+    );
+
+    const composites = [{ input: gradient, top: 0, left: 0 }];
+
+    if (artwork.logo?.buffer) {
+      const logo = await sharp(artwork.logo.buffer)
+        .resize(500, 220, { fit: 'inside', withoutEnlargement: true })
+        .png()
+        .toBuffer();
+
+      const meta = await sharp(logo).metadata();
+      const lw = Number(meta.width || 0);
+      const lh = Number(meta.height || 0);
+
+      if (lw && lh) {
+        composites.push({
+          input: logo,
+          top: Math.max(40, 900 - lh - 65),
+          left: Math.max(20, Math.round((600 - lw) / 2))
+        });
+      }
+    }
+
+    return sharp(background)
+      .composite(composites)
+      .webp({ quality: 90 })
+      .toBuffer();
+  }
+
+  // Fallback for horizontal key art.
+  const meta = await sharp(sourceBuffer).metadata();
+  const width = Number(meta.width || 0);
+  const height = Number(meta.height || 0);
+  if (!width || !height) throw new Error('Invalid source image');
+
+  if (width / height <= 0.9) {
+    return sharp(sourceBuffer)
+      .resize(600, 900, { fit: 'cover', position: 'centre' })
+      .webp({ quality: 90 })
+      .toBuffer();
+  }
+
   const background = await sharp(sourceBuffer)
     .resize(600, 900, { fit: 'cover', position: 'centre' })
-    .blur(30)
-    .modulate({ brightness: 0.38, saturation: 0.86 })
+    .blur(28)
+    .modulate({ brightness: 0.38, saturation: 0.9 })
     .webp({ quality: 82 })
     .toBuffer();
 
   const foreground = await sharp(sourceBuffer)
-    .resize(540, 360, {
+    .resize(560, 420, {
       fit: 'contain',
       background: { r: 0, g: 0, b: 0, alpha: 0 }
     })
     .png()
     .toBuffer();
 
-  const panel = await sharp({
-    create: {
-      width: 570,
-      height: 390,
-      channels: 4,
-      background: { r: 10, g: 10, b: 12, alpha: 0.62 }
-    }
-  }).png().toBuffer();
-
   return sharp(background)
-    .composite([
-      { input: panel, top: 255, left: 15 },
-      { input: foreground, top: 270, left: 30 }
-    ])
+    .composite([{ input: foreground, gravity: 'center' }])
     .webp({ quality: 90 })
     .toBuffer();
 }
@@ -314,12 +363,12 @@ async function getOrCreateCover(steamType, steamId, refresh = false) {
   const cachePath = path.join(COVER_DIR, `app-${appId}.webp`);
   if (!refresh && fs.existsSync(cachePath)) return { cachePath, appId };
 
-  const found = await getAppArtwork(appId);
-  if (!found) throw new Error(`Steam artwork unavailable for AppID ${appId}`);
+  const artwork = await getAppArtwork(appId);
+  if (!artwork) throw new Error(`Steam artwork unavailable for AppID ${appId}`);
 
-  const normalized = await normalizeCover(found.buffer);
+  const normalized = await normalizeCover(artwork);
   fs.writeFileSync(cachePath, normalized);
-  return { cachePath, appId, source: found.source };
+  return { cachePath, appId, source: artwork.image?.source || null };
 }
 
 function sendCover(res, buffer) {
