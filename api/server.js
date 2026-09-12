@@ -40,6 +40,57 @@ async function fetchJson(url) {
   return res.json();
 }
 
+async function fetchText(url, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      redirect: 'follow',
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
+        'Cookie': 'birthtime=0; lastagecheckage=1-January-1970; mature_content=1'
+      }
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function decodeHtmlAttr(value) {
+  return String(value || '')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+}
+
+function extractSteamPageImages(html) {
+  const urls = [];
+  const metaTags = String(html || '').match(/<meta\b[^>]*>/gi) || [];
+
+  for (const tag of metaTags) {
+    const prop =
+      tag.match(/(?:property|name)\s*=\s*["']([^"']+)["']/i)?.[1] || '';
+    if (!/^(?:og:image|twitter:image(?::src)?)$/i.test(prop)) continue;
+
+    const content = tag.match(/content\s*=\s*["']([^"']+)["']/i)?.[1];
+    if (content) urls.push(decodeHtmlAttr(content));
+  }
+
+  // Steam pages also often contain canonical CDN URLs outside meta tags.
+  const cdnMatches = String(html || '').match(
+    /https:\/\/[^"'\s<>]+steamstatic\.com\/[^"'\s<>]+\.(?:jpg|jpeg|png|webp)(?:\?[^"'\s<>]*)?/gi
+  ) || [];
+
+  urls.push(...cdnMatches.map(decodeHtmlAttr));
+  return [...new Set(urls)];
+}
+
 async function getAppPrice(appid, cc) {
   const data = await fetchJson(
     `https://store.steampowered.com/api/appdetails?appids=${appid}&cc=${cc}&filters=basic,price_overview`
@@ -135,14 +186,14 @@ async function resolvePackageAppId(packageId) {
 async function getAppArtwork(appId) {
   let exact = {};
   try {
-    // No filters here: Steam then returns the canonical image URLs including hashes.
+    // First ask Steam API for canonical hashed artwork URLs.
     const data = await fetchJson(
       `https://store.steampowered.com/api/appdetails?appids=${appId}&cc=ru&l=english`
     );
     exact = data?.[String(appId)]?.success ? (data[String(appId)].data || {}) : {};
   } catch (_) {}
 
-  const hashed = [
+  const exactUrls = [
     exact.header_image,
     exact.capsule_image,
     exact.capsule_imagev5,
@@ -160,11 +211,30 @@ async function getAppArtwork(appId) {
     `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/capsule_616x353.jpg`
   ];
 
-  // Portrait first when it exists; otherwise exact Steam URLs are the most reliable.
+  // 1) Best case: a real portrait exists.
   let found = await fetchFirstImage(guessedPortrait);
-  if (!found) found = await fetchFirstImage(hashed);
-  if (!found) found = await fetchFirstImage(guessedLandscape);
-  return found;
+  if (found) return found;
+
+  // 2) Canonical hashed URLs from appdetails.
+  found = await fetchFirstImage(exactUrls);
+  if (found) return found;
+
+  // 3) Common predictable Steam CDN paths.
+  found = await fetchFirstImage(guessedLandscape);
+  if (found) return found;
+
+  // 4) Final fallback for new/unreleased apps:
+  // scrape the official Steam store page and use its og:image/twitter:image/CDN URL.
+  try {
+    const html = await fetchText(
+      `https://store.steampowered.com/app/${appId}/?l=english&cc=ru`
+    );
+    const pageImages = extractSteamPageImages(html);
+    found = await fetchFirstImage(pageImages);
+    if (found) return found;
+  } catch (_) {}
+
+  return null;
 }
 
 async function normalizeCover(sourceBuffer) {
