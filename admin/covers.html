@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>ZibStore — Обложки</title>
+  <meta name="robots" content="noindex,nofollow,noarchive" />
+  <title>ZibStore — Админка обложек</title>
   <style>
     :root{color-scheme:dark}
     *{box-sizing:border-box}
@@ -15,12 +16,13 @@
     input,select,button{background:#171311;color:#f4f1ed;border:1px solid #3a312c;border-radius:10px;padding:10px 12px}
     input{min-width:220px}
     button{cursor:pointer}
-    button.primary{background:#f3a71b;color:#17100a;border-color:#f3a71b;font-weight:700}
+    button.primary{background:#f3a71b;color:#17100a;border-color:#f3a71b;font-weight:800}
+    button.danger{border-color:#70433a}
     .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
     .card{background:#14110f;border:1px solid #2c2521;border-radius:16px;overflow:hidden}
     .cover{aspect-ratio:2/3;background:#1a1512;display:flex;align-items:center;justify-content:center;position:relative}
     .cover img{width:100%;height:100%;object-fit:cover}
-    .badge{position:absolute;left:10px;top:10px;background:#111c;padding:6px 8px;border-radius:8px;font-size:11px}
+    .badge{position:absolute;left:10px;top:10px;background:#111d;padding:6px 8px;border-radius:8px;font-size:11px}
     .body{padding:14px}
     .title{font-weight:800;margin-bottom:6px}
     .meta{font-size:12px;color:#aaa;margin-bottom:12px;word-break:break-all}
@@ -30,13 +32,45 @@
     .actions{display:flex;gap:8px;margin-top:12px}
     .status{font-size:12px;margin-top:8px;min-height:18px}
     .ok{color:#6ee7a8}.err{color:#ff8a8a}
-    .hidden{display:none}
+    .hidden{display:none!important}
+    .login-shell{min-height:100vh;display:grid;place-items:center;padding:24px}
+    .login-box{width:min(420px,100%);background:#14110f;border:1px solid #2c2521;border-radius:18px;padding:24px;box-shadow:0 24px 80px #0008}
+    .login-box h1{font-size:24px;margin-bottom:6px}
+    .login-box .row{margin-top:14px}
+    .login-box input{width:100%;min-width:0}
+    .login-box button{width:100%;margin-top:16px}
+    .topline{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>Управление обложками</h1>
-    <div class="muted">Меняй только проблемные позиции. Цена и Steam-сопоставление не затрагиваются.</div>
+  <section id="loginView" class="login-shell">
+    <form id="loginForm" class="login-box">
+      <h1>ZibStore Admin</h1>
+      <div class="muted">Управление обложками</div>
+
+      <div class="row">
+        <label for="username">Логин</label>
+        <input id="username" autocomplete="username" required />
+      </div>
+
+      <div class="row">
+        <label for="password">Пароль</label>
+        <input id="password" type="password" autocomplete="current-password" required />
+      </div>
+
+      <button id="loginButton" class="primary" type="submit">Войти</button>
+      <div id="loginStatus" class="status"></div>
+    </form>
+  </section>
+
+  <main id="adminView" class="wrap hidden">
+    <div class="topline">
+      <div>
+        <h1>Управление обложками</h1>
+        <div class="muted">Меняй только проблемные позиции. Цена и Steam-сопоставление не затрагиваются.</div>
+      </div>
+      <button id="logout" class="danger">Выйти</button>
+    </div>
 
     <div class="toolbar">
       <input id="q" placeholder="Поиск по названию / ID" />
@@ -50,17 +84,51 @@
     </div>
 
     <div id="grid" class="grid"></div>
-  </div>
+  </main>
 
 <script>
 const API = 'https://api.zibstore.ru';
-
+const TOKEN_KEY = 'zibstore_admin_session';
+let token = sessionStorage.getItem(TOKEN_KEY) || '';
 let items = [];
+
+function authHeaders(extra = {}) {
+  return token ? { ...extra, Authorization: `Bearer ${token}` } : extra;
+}
+
+function showLogin(message = '') {
+  token = '';
+  sessionStorage.removeItem(TOKEN_KEY);
+  document.querySelector('#adminView').classList.add('hidden');
+  document.querySelector('#loginView').classList.remove('hidden');
+  const status = document.querySelector('#loginStatus');
+  status.textContent = message;
+  status.className = message ? 'status err' : 'status';
+}
+
+function showAdmin() {
+  document.querySelector('#loginView').classList.add('hidden');
+  document.querySelector('#adminView').classList.remove('hidden');
+}
+
+async function apiFetch(path, options = {}) {
+  const opts = { ...options };
+  opts.headers = authHeaders(options.headers || {});
+  const res = await fetch(API + path, opts);
+
+  if (res.status === 401) {
+    showLogin('Сессия истекла. Войди снова.');
+    throw new Error('Unauthorized');
+  }
+
+  return res;
+}
 
 function coverEndpoint(item){
   if(item.coverMode === 'custom' && item.coverUrl){
     try { return new URL(item.coverUrl, location.origin).toString(); } catch(_) { return item.coverUrl; }
   }
+
   const u = new URL(API + '/api/cover');
   if(item.coverAppId){
     u.searchParams.set('steamType','app');
@@ -81,6 +149,7 @@ function visible(item){
   const q = document.querySelector('#q').value.trim().toLowerCase();
   const f = document.querySelector('#filter').value;
   const text = `${item.title} ${item.productId} ${item.steamId} ${item.coverAppId||''}`.toLowerCase();
+
   if(q && !text.includes(q)) return false;
   if(f === 'custom' && item.coverMode !== 'custom') return false;
   if(f === 'coverAppId' && !item.coverAppId) return false;
@@ -129,7 +198,8 @@ function card(item){
 
   div.querySelector('[data-action="preview"]').onclick = () => {
     const current = readCard(div,item);
-    div.querySelector('img').src = coverEndpoint(current) + (coverEndpoint(current).includes('?') ? '&' : '?') + '_=' + Date.now();
+    const url = coverEndpoint(current);
+    div.querySelector('img').src = url + (url.includes('?') ? '&' : '?') + '_=' + Date.now();
   };
 
   div.querySelector('[data-action="save"]').onclick = async () => {
@@ -139,7 +209,7 @@ function card(item){
     status.className = 'status';
 
     try{
-      const r = await fetch(API + '/api/admin/covers',{
+      const r = await apiFetch('/api/admin/covers',{
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({
@@ -155,10 +225,14 @@ function card(item){
       Object.assign(item,data.item);
       status.textContent = 'Сохранено';
       status.className = 'status ok';
-      div.querySelector('img').src = coverEndpoint(item) + (coverEndpoint(item).includes('?') ? '&' : '?') + '_=' + Date.now();
+
+      const url = coverEndpoint(item);
+      div.querySelector('img').src = url + (url.includes('?') ? '&' : '?') + '_=' + Date.now();
     }catch(e){
-      status.textContent = e.message;
-      status.className = 'status err';
+      if(e.message !== 'Unauthorized'){
+        status.textContent = e.message;
+        status.className = 'status err';
+      }
     }
   };
 
@@ -183,21 +257,80 @@ function render(){
 async function load(){
   const g = document.querySelector('#grid');
   g.innerHTML = '<div class="muted">Загрузка…</div>';
+
   try{
-    const r = await fetch(API + '/api/admin/covers');
+    const r = await apiFetch('/api/admin/covers');
     const data = await r.json();
     if(!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
+
     items = data.items || [];
+    showAdmin();
     render();
   }catch(e){
-    g.innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
+    if(e.message !== 'Unauthorized'){
+      g.innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
+    }
   }
 }
+
+document.querySelector('#loginForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+
+  const username = document.querySelector('#username').value;
+  const password = document.querySelector('#password').value;
+  const status = document.querySelector('#loginStatus');
+  const button = document.querySelector('#loginButton');
+
+  status.textContent = 'Вхожу…';
+  status.className = 'status';
+  button.disabled = true;
+
+  try{
+    const r = await fetch(API + '/api/admin/login',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({username,password})
+    });
+
+    const data = await r.json();
+    if(!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
+
+    token = data.token;
+    sessionStorage.setItem(TOKEN_KEY, token);
+    document.querySelector('#password').value = '';
+    status.textContent = '';
+
+    await load();
+  }catch(e){
+    status.textContent = e.message;
+    status.className = 'status err';
+  }finally{
+    button.disabled = false;
+  }
+});
+
+document.querySelector('#logout').addEventListener('click', async () => {
+  try{
+    if(token){
+      await fetch(API + '/api/admin/logout',{
+        method:'POST',
+        headers:{Authorization:`Bearer ${token}`}
+      });
+    }
+  }catch(_){}
+
+  showLogin('');
+});
 
 document.querySelector('#q').addEventListener('input',render);
 document.querySelector('#filter').addEventListener('change',render);
 document.querySelector('#reload').onclick=load;
-load();
+
+if(token){
+  load();
+}else{
+  showLogin('');
+}
 </script>
 </body>
 </html>
