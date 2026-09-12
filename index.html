@@ -321,22 +321,104 @@
 
   // Новый собственный backend на Selectel VPS.
   // Основной регион — RU. Backend сам делает fallback: RU → KZ → UA → US.
+  // ZibStore frontend API: VPS
   const STEAM_API_BASE = 'https://api.zibstore.ru/api/steam-price';
 
   async function fetchSteamPrice(target) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+
     try {
       const params = new URLSearchParams();
       if (target.type === 'package') params.set('packageid', target.id);
       else params.set('appid', target.id);
-      // Явно просим RU. Backend при отсутствии цены попробует fallback-регионы.
+
+      // Всегда начинаем с RU. VPS сам делает fallback, если цены в RU нет.
       params.set('cc', 'ru');
-      const res = await fetch(`${STEAM_API_BASE}?${params.toString()}`);
+
+      const res = await fetch(`${STEAM_API_BASE}?${params.toString()}`, {
+        signal: controller.signal
+      });
+
       if (!res.ok) throw new Error(`Steam proxy HTTP ${res.status}`);
       return await res.json();
     } catch (err) {
+      const message = err?.name === 'AbortError'
+        ? 'Превышено время ожидания Steam'
+        : (err?.message || String(err));
+
       console.warn('Steam price request failed:', target, err);
-      return { available: false, error: err?.message || String(err) };
+      return { available: false, error: message };
+    } finally {
+      clearTimeout(timeoutId);
     }
+  }
+
+  function renderSteamPriceResult(el, product, steam) {
+    if (!steam || !steam.available || typeof steam.final_rub !== 'number') {
+      el.remove();
+      return;
+    }
+
+    const ourPrice = Number(product.price_rub ?? product.price ?? product.base_price);
+    const steamRub = Number(steam.final_rub);
+
+    if (!Number.isFinite(ourPrice) || !Number.isFinite(steamRub) || steamRub <= 0) {
+      el.remove();
+      return;
+    }
+
+    const diff = ourPrice - steamRub;
+    const storeIsCheaper = diff < 0;
+    const denominator = storeIsCheaper ? steamRub : ourPrice;
+    const pct = Math.round(Math.abs(diff) / denominator * 100);
+
+    const shownSteamRub = Math.round(steamRub).toLocaleString('ru-RU');
+    const originalPrice = formatSteamOriginalPrice(steam);
+
+    const foundRegion = STEAM_REGION_LABELS[steam.cc] || String(steam.cc || '').toUpperCase();
+    const fallbackNote = foundRegion && foundRegion !== 'RU'
+      ? ` · найдено в ${foundRegion}`
+      : '';
+
+    const savingsBadge = storeIsCheaper
+      ? `<span class="inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-300">${escapeHtml(`Экономия ${pct}%`)}</span>`
+      : diff > 0
+        ? `<span class="inline-flex items-center rounded-full bg-amber-500/10 px-2 py-1 text-[11px] font-semibold text-amber-300">${escapeHtml(`Steam дешевле на ${pct}%`)}</span>`
+        : `<span class="inline-flex items-center rounded-full bg-white/5 px-2 py-1 text-[11px] font-semibold text-nox-muted">Цена одинаковая</span>`;
+
+    const steamLine = `${escapeHtml(originalPrice)} · ≈ ${shownSteamRub} ₽`;
+    const steamMeta = `Steam${fallbackNote}`;
+
+    el.innerHTML = `
+      <div class="min-w-0">
+        <div class="mt-1">${savingsBadge}</div>
+        <div class="mt-1.5 text-[11px] text-nox-muted">${steamMeta} · ${steamLine}</div>
+      </div>
+    `;
+
+    if (steam.fx && steam.fx.rate) {
+      const date = steam.fx.date ? ` на ${steam.fx.date}` : '';
+      el.title = `Курс ЦБ РФ${date}: 1 ${steam.currency} = ${Number(steam.fx.rate).toFixed(4)} ₽`;
+    }
+  }
+
+  async function enhanceWithSteamPrices(products) {
+    const targets = products
+      .map(product => ({ product, target: getSteamTarget(product) }))
+      .filter(x => x.target);
+
+    // Запрашиваем цены параллельно, чтобы одна зависшая игра не блокировала остальные.
+    await Promise.all(targets.map(async ({ product, target }) => {
+      const el = document.getElementById(`steam-cmp-${product.id}`);
+      if (!el) return;
+
+      el.innerHTML = `<span class="text-nox-muted">Проверяем цену Steam…</span>`;
+      el.removeAttribute('title');
+
+      const steam = await fetchSteamPrice(target);
+      renderSteamPriceResult(el, product, steam);
+    }));
   }
 
   function formatSteamOriginalPrice(steam) {
