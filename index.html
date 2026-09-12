@@ -282,75 +282,50 @@
     ru: 'RU', kz: 'KZ', ua: 'UA', us: 'US', de: 'DE', tr: 'TR'
   };
 
-  // Matcher на GitHub Pages сохраняет выбранные соответствия в localStorage
-  // на том же origin (/zibstore/matcher/). Подхватываем их автоматически,
-  // поэтому после выбора AppID/Package/SubID не нужно править этот файл вручную.
-  const MATCHER_STORAGE_KEY = 'zibstore-steam-matches-v1';
+  // ---------------- Серверные сопоставления Steam ----------------
+  // Единый источник истины — наш VPS. localStorage больше не используется
+  // как источник сопоставлений для основного магазина.
+  const STEAM_MATCHES_API = 'https://api.zibstore.ru/api/steam-matches';
+  let serverSteamMatches = {};
 
-  const REMOTE_MATCHES_URL = 'https://api.zibstore.ru/api/steam-matches';
-  let REMOTE_STEAM_MATCHES = {};
-
-  async function loadRemoteSteamMatches() {
+  async function loadSteamMatches() {
     try {
-      const res = await fetch(REMOTE_MATCHES_URL, { cache: 'no-store' });
-      if (!res.ok) throw new Error(`matches HTTP ${res.status}`);
+      const res = await fetch(STEAM_MATCHES_API, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`Steam matches HTTP ${res.status}`);
       const data = await res.json();
-      REMOTE_STEAM_MATCHES = (data && data.matches && typeof data.matches === 'object')
-        ? data.matches
-        : {};
+      if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        throw new Error('Некорректный формат Steam matches');
+      }
+      serverSteamMatches = data;
+      return true;
     } catch (err) {
-      console.warn('Не удалось загрузить сопоставления Steam с VPS:', err);
-      REMOTE_STEAM_MATCHES = {};
-    }
-  }
-
-
-  function getMatcherMap() {
-    try {
-      const raw = localStorage.getItem(MATCHER_STORAGE_KEY);
-      const data = raw ? JSON.parse(raw) : {};
-      return data && typeof data === 'object' ? data : {};
-    } catch (err) {
-      console.warn('Не удалось прочитать Steam-сопоставления matcher:', err);
-      return {};
+      console.warn('Не удалось загрузить серверные Steam-сопоставления:', err);
+      serverSteamMatches = {};
+      return false;
     }
   }
 
   function getSteamTarget(product) {
-    const remote = REMOTE_STEAM_MATCHES[String(product.id)];
-    if (remote && remote.steamId) {
-      return {
-        type: remote.type === 'package' ? 'package' : 'app',
-        id: String(remote.steamId),
-        label: remote.title || product.name,
-        region: 'ru'
-      };
-    }
-
-    const matcher = getMatcherMap();
-    const saved = matcher[String(product.id)];
+    const saved = serverSteamMatches[String(product.id)];
     if (saved && saved.steamId) {
       return {
         type: saved.type === 'package' ? 'package' : 'app',
         id: String(saved.steamId),
         label: saved.title || product.name,
+        // Российский регион всегда первый; старое поле region из matcher игнорируем.
         region: 'ru'
       };
     }
 
     const exact = STEAM_PRICE_MAP.byDigisellerId[String(product.id)];
-    if (exact) return exact;
+    if (exact) return { ...exact, region: 'ru' };
 
     const name = String(product.name || '');
-    const fallback = STEAM_PRICE_MAP.byName.find(rule => rule.test(name))?.target || null;
-    if (fallback) return { ...fallback, region: 'ru' };
-    return null;
+    const target = STEAM_PRICE_MAP.byName.find(rule => rule.test(name))?.target || null;
+    return target ? { ...target, region: 'ru' } : null;
   }
 
-  // GitHub Pages — статический хостинг, поэтому Steam API вызывается
-  // через уже работающую Netlify Function на отдельном домене.
-  // Если домен Netlify изменится, меняем только эту строку.
-  // Текущий backend: tubular-raindrop-b709b3.netlify.app
+  // Steam API на нашем собственном VPS.
   const STEAM_API_BASE = 'https://api.zibstore.ru/api/steam-price';
 
   async function fetchSteamPrice(target) {
@@ -360,7 +335,7 @@
       else params.set('appid', target.id);
       // KZ — основной регион сравнения для нашего магазина. Сама функция при необходимости
       // сделает fallback на UA -> US и вернёт фактический регион в steam.cc.
-      params.set('cc', 'ru');
+      params.set('cc', target.region || 'kz');
       const res = await fetch(`${STEAM_API_BASE}?${params.toString()}`);
       if (!res.ok) throw new Error(`Steam proxy HTTP ${res.status}`);
       return await res.json();
@@ -386,9 +361,9 @@
       .map(product => ({ product, target: getSteamTarget(product) }))
       .filter(x => x.target);
 
-    for (const { product, target } of targets) {
+    await Promise.allSettled(targets.map(async ({ product, target }) => {
       const el = document.getElementById(`steam-cmp-${product.id}`);
-      if (!el) continue;
+      if (!el) return;
 
       el.innerHTML = `<span class="text-nox-muted">Проверяем цену Steam…</span>`;
       el.removeAttribute('title');
@@ -396,14 +371,14 @@
       const steam = await fetchSteamPrice(target);
       if (!steam || !steam.available || typeof steam.final_rub !== 'number') {
         el.innerHTML = '';
-        continue;
+        return;
       }
 
       const ourPrice = Number(product.price_rub ?? product.price ?? product.base_price);
       const steamRub = Number(steam.final_rub);
       if (!Number.isFinite(ourPrice) || !Number.isFinite(steamRub) || steamRub <= 0) {
-        el.innerHTML = `<span class="text-nox-muted">Steam: не удалось сравнить цену</span>`;
-        continue;
+        el.innerHTML = '';
+        return;
       }
 
       const diff = ourPrice - steamRub;
@@ -412,20 +387,10 @@
       const pct = Math.round(Math.abs(diff) / denominator * 100);
       const shownSteamRub = Math.round(steamRub).toLocaleString('ru-RU');
       const originalPrice = formatSteamOriginalPrice(steam);
-      const comparisonLabel = formatSteamComparisonLabel(steam);
-
-      let verdict = '';
-      if (storeIsCheaper) {
-        verdict = `<span class="font-semibold text-emerald-400">ЗибСтор дешевле на ${pct}%</span>`;
-      } else if (diff > 0) {
-        verdict = `<span class="font-semibold text-amber-400">Steam дешевле на ${pct}%</span>`;
-      } else {
-        verdict = `<span class="font-semibold text-nox-muted">Цена одинаковая</span>`;
-      }
 
       const foundRegion = STEAM_REGION_LABELS[steam.cc] || String(steam.cc || '').toUpperCase();
-      const requestedRegion = target.region ? (STEAM_REGION_LABELS[target.region] || target.region.toUpperCase()) : null;
-      const fallbackNote = requestedRegion && requestedRegion !== foundRegion
+      const requestedRegion = 'RU';
+      const fallbackNote = foundRegion && foundRegion !== requestedRegion
         ? ` · найдено в ${foundRegion}`
         : '';
 
@@ -449,7 +414,7 @@
         const date = steam.fx.date ? ` на ${steam.fx.date}` : '';
         el.title = `Курс ЦБ РФ${date}: 1 ${steam.currency} = ${Number(steam.fx.rate).toFixed(4)} ₽`;
       }
-    }
+    }));
   }
 
   function buildUrl(path, params) {
@@ -698,14 +663,14 @@
     }
   });
 
-  // Если сопоставление было сохранено в отдельной вкладке matcher,
-  // обновляем каталог в уже открытом магазине автоматически.
-  window.addEventListener('storage', event => {
-    if (event.key === MATCHER_STORAGE_KEY) loadProducts();
-  });
-
   // ---------------- Старт ----------------
-  loadRemoteSteamMatches().then(loadCategories);
+  (async () => {
+    const loaded = await loadSteamMatches();
+    if (!loaded) {
+      showBanner('Не удалось загрузить серверные Steam-сопоставления. Цены Steam временно не показываются.');
+    }
+    await loadCategories();
+  })();
   </script>
 </body>
 </html>
