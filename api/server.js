@@ -404,6 +404,55 @@ function json(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+async function readJsonBody(req, limit = 1024 * 1024) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) throw new Error('Request body too large');
+    chunks.push(chunk);
+  }
+  const raw = Buffer.concat(chunks).toString('utf8').trim();
+  return raw ? JSON.parse(raw) : {};
+}
+
+const MATCHES_PATH = path.join(__dirname, '..', 'data', 'steam-matches.json');
+
+function readSteamMatchesFile() {
+  try {
+    return JSON.parse(fs.readFileSync(MATCHES_PATH, 'utf8'));
+  } catch (_) {
+    return {};
+  }
+}
+
+function writeSteamMatchesFile(data) {
+  const tmp = `${MATCHES_PATH}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n', 'utf8');
+  fs.renameSync(tmp, MATCHES_PATH);
+}
+
+function sanitizeCoverPatch(input = {}) {
+  const out = {};
+
+  if ('coverMode' in input) {
+    const mode = String(input.coverMode || '').toLowerCase();
+    out.coverMode = ['steam', 'custom'].includes(mode) ? mode : 'steam';
+  }
+
+  if ('coverAppId' in input) {
+    const value = String(input.coverAppId || '').trim();
+    out.coverAppId = /^\d+$/.test(value) ? value : null;
+  }
+
+  if ('coverUrl' in input) {
+    const value = String(input.coverUrl || '').trim();
+    out.coverUrl = value || null;
+  }
+
+  return out;
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') {
     res.writeHead(204, CORS);
@@ -424,6 +473,49 @@ const server = http.createServer(async (req, res) => {
   }
 
 
+
+
+  if (url.pathname === '/api/admin/covers' && req.method === 'GET') {
+    const matches = readSteamMatchesFile();
+    const items = Object.entries(matches).map(([productId, item]) => ({
+      productId,
+      type: item.type || 'app',
+      steamId: item.steamId || '',
+      title: item.title || '',
+      region: item.region || 'ru',
+      coverMode: item.coverMode || 'steam',
+      coverAppId: item.coverAppId || '',
+      coverUrl: item.coverUrl || ''
+    }));
+    return json(res, 200, { ok: true, items });
+  }
+
+  if (url.pathname === '/api/admin/covers' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const productId = String(body.productId || '').trim();
+      if (!productId) return json(res, 400, { ok: false, error: 'productId is required' });
+
+      const matches = readSteamMatchesFile();
+      if (!matches[productId]) {
+        return json(res, 404, { ok: false, error: 'Product mapping not found' });
+      }
+
+      const patch = sanitizeCoverPatch(body);
+      const next = { ...matches[productId], ...patch };
+
+      if (!next.coverAppId) delete next.coverAppId;
+      if (!next.coverUrl) delete next.coverUrl;
+      if (!next.coverMode) next.coverMode = 'steam';
+
+      matches[productId] = next;
+      writeSteamMatchesFile(matches);
+
+      return json(res, 200, { ok: true, productId, item: next });
+    } catch (err) {
+      return json(res, 400, { ok: false, error: err.message });
+    }
+  }
 
   if (url.pathname === '/api/cover') {
     const steamType = String(url.searchParams.get('steamType') || '').toLowerCase();
