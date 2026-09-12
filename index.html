@@ -229,6 +229,52 @@
           region: 'kz'
         }
       }
+      ,
+      {
+        test: name => /Palworld/i.test(name),
+        target: {
+          type: 'app',
+          id: '1623730',
+          label: 'Palworld',
+          region: 'kz'
+        }
+      },
+      {
+        test: name => /Rayman\s+Legends/i.test(name),
+        target: {
+          type: 'app',
+          id: '242550',
+          label: 'Rayman Legends',
+          region: 'kz'
+        }
+      },
+      {
+        test: name => /The\s+Blood\s+of\s+Dawnwalker/i.test(name),
+        target: {
+          type: 'app',
+          id: '3751260',
+          label: 'The Blood of Dawnwalker',
+          region: 'kz'
+        }
+      },
+      {
+        test: name => /(?:R\.E\.P\.O\.|REPO)/i.test(name),
+        target: {
+          type: 'app',
+          id: '3241660',
+          label: 'R.E.P.O.',
+          region: 'kz'
+        }
+      },
+      {
+        test: name => /Slay\s+the\s+Spire\s+2/i.test(name),
+        target: {
+          type: 'app',
+          id: '2868840',
+          label: 'Slay the Spire 2',
+          region: 'kz'
+        }
+      }
     ]
   };
 
@@ -236,7 +282,34 @@
     ru: 'RU', kz: 'KZ', ua: 'UA', us: 'US', de: 'DE', tr: 'TR'
   };
 
+  // Matcher на GitHub Pages сохраняет выбранные соответствия в localStorage
+  // на том же origin (/zibstore/matcher/). Подхватываем их автоматически,
+  // поэтому после выбора AppID/Package/SubID не нужно править этот файл вручную.
+  const MATCHER_STORAGE_KEY = 'zibstore-steam-matches-v1';
+
+  function getMatcherMap() {
+    try {
+      const raw = localStorage.getItem(MATCHER_STORAGE_KEY);
+      const data = raw ? JSON.parse(raw) : {};
+      return data && typeof data === 'object' ? data : {};
+    } catch (err) {
+      console.warn('Не удалось прочитать Steam-сопоставления matcher:', err);
+      return {};
+    }
+  }
+
   function getSteamTarget(product) {
+    const matcher = getMatcherMap();
+    const saved = matcher[String(product.id)];
+    if (saved && saved.steamId) {
+      return {
+        type: saved.type === 'package' ? 'package' : 'app',
+        id: String(saved.steamId),
+        label: saved.title || product.name,
+        region: saved.region || 'kz'
+      };
+    }
+
     const exact = STEAM_PRICE_MAP.byDigisellerId[String(product.id)];
     if (exact) return exact;
     const name = String(product.name || '');
@@ -595,6 +668,12 @@
     if (e.key === 'Enter') {
       document.getElementById('catalog').scrollIntoView({ behavior: 'smooth' });
     }
+  });
+
+  // Если сопоставление было сохранено в отдельной вкладке matcher,
+  // обновляем каталог в уже открытом магазине автоматически.
+  window.addEventListener('storage', event => {
+    if (event.key === MATCHER_STORAGE_KEY) loadProducts();
   });
 
   // ---------------- Старт ----------------
