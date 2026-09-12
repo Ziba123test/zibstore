@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ZibStore — Обложки</title>
+  <style>
+    :root{color-scheme:dark}
+    *{box-sizing:border-box}
+    body{margin:0;background:#0d0b0a;color:#f4f1ed;font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+    .wrap{max-width:1400px;margin:0 auto;padding:24px}
+    h1{margin:0 0 6px;font-size:28px}
+    .muted{color:#9f968f}
+    .toolbar{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0}
+    input,select,button{background:#171311;color:#f4f1ed;border:1px solid #3a312c;border-radius:10px;padding:10px 12px}
+    input{min-width:220px}
+    button{cursor:pointer}
+    button.primary{background:#f3a71b;color:#17100a;border-color:#f3a71b;font-weight:700}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+    .card{background:#14110f;border:1px solid #2c2521;border-radius:16px;overflow:hidden}
+    .cover{aspect-ratio:2/3;background:#1a1512;display:flex;align-items:center;justify-content:center;position:relative}
+    .cover img{width:100%;height:100%;object-fit:cover}
+    .badge{position:absolute;left:10px;top:10px;background:#111c;padding:6px 8px;border-radius:8px;font-size:11px}
+    .body{padding:14px}
+    .title{font-weight:800;margin-bottom:6px}
+    .meta{font-size:12px;color:#aaa;margin-bottom:12px;word-break:break-all}
+    .row{display:grid;grid-template-columns:1fr;gap:8px;margin-top:8px}
+    .row label{font-size:12px;color:#bdb4ad}
+    .row input,.row select{width:100%;min-width:0}
+    .actions{display:flex;gap:8px;margin-top:12px}
+    .status{font-size:12px;margin-top:8px;min-height:18px}
+    .ok{color:#6ee7a8}.err{color:#ff8a8a}
+    .hidden{display:none}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Управление обложками</h1>
+    <div class="muted">Меняй только проблемные позиции. Цена и Steam-сопоставление не затрагиваются.</div>
+
+    <div class="toolbar">
+      <input id="q" placeholder="Поиск по названию / ID" />
+      <select id="filter">
+        <option value="all">Все</option>
+        <option value="custom">Только custom</option>
+        <option value="coverAppId">С coverAppId</option>
+        <option value="steam">Обычный Steam</option>
+      </select>
+      <button id="reload">Обновить</button>
+    </div>
+
+    <div id="grid" class="grid"></div>
+  </div>
+
+<script>
+const API = 'https://api.zibstore.ru';
+
+let items = [];
+
+function coverEndpoint(item){
+  if(item.coverMode === 'custom' && item.coverUrl){
+    try { return new URL(item.coverUrl, location.origin).toString(); } catch(_) { return item.coverUrl; }
+  }
+  const u = new URL(API + '/api/cover');
+  if(item.coverAppId){
+    u.searchParams.set('steamType','app');
+    u.searchParams.set('steamId',item.coverAppId);
+  }else{
+    u.searchParams.set('steamType',item.type === 'package' ? 'package':'app');
+    u.searchParams.set('steamId',item.steamId);
+  }
+  u.searchParams.set('refresh','1');
+  return u.toString();
+}
+
+function escapeHtml(s){
+  return String(s??'').replace(/[&<>"']/g,c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+function visible(item){
+  const q = document.querySelector('#q').value.trim().toLowerCase();
+  const f = document.querySelector('#filter').value;
+  const text = `${item.title} ${item.productId} ${item.steamId} ${item.coverAppId||''}`.toLowerCase();
+  if(q && !text.includes(q)) return false;
+  if(f === 'custom' && item.coverMode !== 'custom') return false;
+  if(f === 'coverAppId' && !item.coverAppId) return false;
+  if(f === 'steam' && (item.coverMode === 'custom' || item.coverAppId)) return false;
+  return true;
+}
+
+function card(item){
+  const div = document.createElement('div');
+  div.className = 'card';
+  div.dataset.productId = item.productId;
+  div.innerHTML = `
+    <div class="cover">
+      <span class="badge">${escapeHtml(item.type)} · ${escapeHtml(item.steamId)}</span>
+      <img alt="" src="${escapeHtml(coverEndpoint(item))}">
+    </div>
+    <div class="body">
+      <div class="title">${escapeHtml(item.title || `Product ${item.productId}`)}</div>
+      <div class="meta">Product ID: ${escapeHtml(item.productId)}</div>
+
+      <div class="row">
+        <label>Режим</label>
+        <select data-k="coverMode">
+          <option value="steam" ${item.coverMode!=='custom'?'selected':''}>Steam</option>
+          <option value="custom" ${item.coverMode==='custom'?'selected':''}>Custom URL</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <label>coverAppId — AppID только для картинки</label>
+        <input data-k="coverAppId" value="${escapeHtml(item.coverAppId||'')}" placeholder="например 3017860">
+      </div>
+
+      <div class="row">
+        <label>coverUrl — своя картинка</label>
+        <input data-k="coverUrl" value="${escapeHtml(item.coverUrl||'')}" placeholder="/covers/custom/game.webp или https://...">
+      </div>
+
+      <div class="actions">
+        <button class="primary" data-action="save">Сохранить</button>
+        <button data-action="preview">Превью</button>
+      </div>
+      <div class="status"></div>
+    </div>
+  `;
+
+  div.querySelector('[data-action="preview"]').onclick = () => {
+    const current = readCard(div,item);
+    div.querySelector('img').src = coverEndpoint(current) + (coverEndpoint(current).includes('?') ? '&' : '?') + '_=' + Date.now();
+  };
+
+  div.querySelector('[data-action="save"]').onclick = async () => {
+    const current = readCard(div,item);
+    const status = div.querySelector('.status');
+    status.textContent = 'Сохраняю…';
+    status.className = 'status';
+
+    try{
+      const r = await fetch(API + '/api/admin/covers',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          productId:item.productId,
+          coverMode:current.coverMode,
+          coverAppId:current.coverAppId,
+          coverUrl:current.coverUrl
+        })
+      });
+      const data = await r.json();
+      if(!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
+
+      Object.assign(item,data.item);
+      status.textContent = 'Сохранено';
+      status.className = 'status ok';
+      div.querySelector('img').src = coverEndpoint(item) + (coverEndpoint(item).includes('?') ? '&' : '?') + '_=' + Date.now();
+    }catch(e){
+      status.textContent = e.message;
+      status.className = 'status err';
+    }
+  };
+
+  return div;
+}
+
+function readCard(div,item){
+  return {
+    ...item,
+    coverMode:div.querySelector('[data-k="coverMode"]').value,
+    coverAppId:div.querySelector('[data-k="coverAppId"]').value.trim(),
+    coverUrl:div.querySelector('[data-k="coverUrl"]').value.trim()
+  };
+}
+
+function render(){
+  const g = document.querySelector('#grid');
+  g.innerHTML = '';
+  for(const item of items.filter(visible)) g.appendChild(card(item));
+}
+
+async function load(){
+  const g = document.querySelector('#grid');
+  g.innerHTML = '<div class="muted">Загрузка…</div>';
+  try{
+    const r = await fetch(API + '/api/admin/covers');
+    const data = await r.json();
+    if(!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    items = data.items || [];
+    render();
+  }catch(e){
+    g.innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+document.querySelector('#q').addEventListener('input',render);
+document.querySelector('#filter').addEventListener('change',render);
+document.querySelector('#reload').onclick=load;
+load();
+</script>
+</body>
+</html>
