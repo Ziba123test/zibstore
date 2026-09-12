@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <!-- ZibStore frontend v28: normalized artwork via /api/cover only -->
+  <!-- ZibStore frontend v31: normalized covers; cover cache rev 2 -->
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>ЗибСтор — Ключи игр | Честное сравнение цен</title>
@@ -364,6 +364,8 @@
     return steam.currency === 'RUB' ? `Steam ${region}` : `Steam ${region} · по курсу ЦБ РФ`;
   }
 
+  const COVER_CACHE_VERSION = '2';
+
   function setSteamArtwork(productId, steam) {
     if (!steam || !steam.steamId || !steam.steamType) return;
 
@@ -374,6 +376,7 @@
     const coverUrl = new URL('https://api.zibstore.ru/api/cover');
     coverUrl.searchParams.set('steamType', steam.steamType);
     coverUrl.searchParams.set('steamId', String(steam.steamId));
+    coverUrl.searchParams.set('cv', COVER_CACHE_VERSION);
 
     const img = document.createElement('img');
     img.src = coverUrl.toString();
