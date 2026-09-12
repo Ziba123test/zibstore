@@ -186,19 +186,35 @@ async function resolvePackageAppId(packageId) {
 async function getAppArtwork(appId) {
   let exact = {};
   try {
-    // First ask Steam API for canonical hashed artwork URLs.
     const data = await fetchJson(
       `https://store.steampowered.com/api/appdetails?appids=${appId}&cc=ru&l=english`
     );
     exact = data?.[String(appId)]?.success ? (data[String(appId)].data || {}) : {};
   } catch (_) {}
 
+  // Canonical app-specific artwork returned by Steam.
+  const screenshotUrls = Array.isArray(exact.screenshots)
+    ? exact.screenshots.flatMap(x => [x?.path_full, x?.path_thumbnail])
+    : [];
+
+  const moviePosterUrls = Array.isArray(exact.movies)
+    ? exact.movies.flatMap(x => [
+        x?.thumbnail,
+        x?.webm?.max,
+        x?.webm?.['480'],
+        x?.mp4?.max,
+        x?.mp4?.['480']
+      ])
+    : [];
+
   const exactUrls = [
     exact.header_image,
     exact.capsule_image,
     exact.capsule_imagev5,
     exact.background_raw,
-    exact.background
+    exact.background,
+    ...screenshotUrls,
+    ...moviePosterUrls
   ];
 
   const guessedPortrait = [
@@ -211,25 +227,32 @@ async function getAppArtwork(appId) {
     `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/capsule_616x353.jpg`
   ];
 
-  // 1) Best case: a real portrait exists.
+  // 1) Prefer a real portrait when Steam exposes one.
   let found = await fetchFirstImage(guessedPortrait);
   if (found) return found;
 
-  // 2) Canonical hashed URLs from appdetails.
+  // 2) Then use canonical artwork/screenshots from appdetails.
   found = await fetchFirstImage(exactUrls);
   if (found) return found;
 
-  // 3) Common predictable Steam CDN paths.
+  // 3) Common app-specific CDN paths.
   found = await fetchFirstImage(guessedLandscape);
   if (found) return found;
 
-  // 4) Final fallback for new/unreleased apps:
-  // scrape the official Steam store page and use its og:image/twitter:image/CDN URL.
+  // 4) Last resort: scrape the store page, but ONLY accept URLs that are
+  // clearly tied to this AppID. This prevents the generic Steam logo from
+  // becoming a product cover.
   try {
     const html = await fetchText(
       `https://store.steampowered.com/app/${appId}/?l=english&cc=ru`
     );
-    const pageImages = extractSteamPageImages(html);
+    const pageImages = extractSteamPageImages(html).filter(url => {
+      const s = String(url || '');
+      return (
+        s.includes(`/steam/apps/${appId}/`) ||
+        s.includes(`/store_item_assets/steam/apps/${appId}/`)
+      );
+    });
     found = await fetchFirstImage(pageImages);
     if (found) return found;
   } catch (_) {}
