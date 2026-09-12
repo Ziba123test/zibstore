@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <!-- ZibStore frontend v37: Steam hero+logo poster synthesis -->
+  <!-- ZibStore frontend v38: unified synthesized posters; cover cache rev 5 -->
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>ЗибСтор — Ключи игр | Честное сравнение цен</title>
@@ -367,7 +367,7 @@
     return steam.currency === 'RUB' ? `Steam ${region}` : `Steam ${region} · по курсу ЦБ РФ`;
   }
 
-  const COVER_CACHE_VERSION = '4';
+  const COVER_CACHE_VERSION = '5';
 
   function setSteamArtwork(productId, steam, target = null) {
     if (!steam || !steam.steamId || !steam.steamType) return;
