@@ -184,29 +184,16 @@ async function resolvePackageAppId(packageId) {
 }
 
 async function getAppArtwork(appId) {
-  // 1) Native portrait is ideal.
+  // 1) Native Steam portrait is always preferred.
   const portraitUrls = [
     `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`,
-    `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`
+    `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`,
+    `https://cdn.cloudflare.steamstatic.com/steam/apps/${appId}/library_600x900.jpg`
   ];
-  let portrait = await fetchFirstImage(portraitUrls);
-  if (portrait) return { kind: 'portrait', image: portrait };
+  const portrait = await fetchFirstImage(portraitUrls);
+  if (portrait) return { kind: 'portrait', image: portrait, name: '' };
 
-  // 2) If Steam has no portrait, build one from Steam's own library hero + logo.
-  const heroUrls = [
-    `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_hero.jpg`,
-    `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/library_hero.jpg`
-  ];
-  const logoUrls = [
-    `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/logo.png`,
-    `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/logo.png`
-  ];
-
-  const hero = await fetchFirstImage(heroUrls);
-  const logo = await fetchFirstImage(logoUrls);
-  if (hero) return { kind: 'hero', image: hero, logo };
-
-  // 3) Official key art via appdetails, region-independent from pricing.
+  // 2) Resolve metadata independently from pricing region.
   let exact = {};
   for (const cc of ['us', 'kz', 'ru']) {
     try {
@@ -221,17 +208,34 @@ async function getAppArtwork(appId) {
     } catch (_) {}
   }
 
-  const keyArtUrls = [
+  const name = String(exact.name || '').trim();
+
+  // Steam library hero/logo give the nicest fallback when available.
+  const hero = await fetchFirstImage([
+    `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_hero.jpg`,
+    `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/library_hero.jpg`,
+    exact.background_raw,
+    exact.background
+  ]);
+
+  const logo = await fetchFirstImage([
+    `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/logo.png`,
+    `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/logo.png`
+  ]);
+
+  if (hero) return { kind: 'synthetic', image: hero, logo, name };
+
+  // Official store key art, no screenshots.
+  let keyArt = await fetchFirstImage([
     exact.header_image,
     exact.capsule_image,
     exact.capsule_imagev5,
     exact.background_raw,
     exact.background
-  ];
-  let keyArt = await fetchFirstImage(keyArtUrls);
-  if (keyArt) return { kind: 'keyart', image: keyArt };
+  ]);
+  if (keyArt) return { kind: 'synthetic', image: keyArt, logo, name };
 
-  // 4) Final page fallback: app-specific non-screenshot Steam artwork only.
+  // Final Steam-page fallback, but only app-specific non-screenshot assets.
   for (const cc of ['us', 'kz', 'ru']) {
     try {
       const html = await fetchText(
@@ -250,12 +254,40 @@ async function getAppArtwork(appId) {
         const screenshotLike = /screenshots|ss_[a-f0-9]+/i.test(s);
         return belongsToApp && !generic && !screenshotLike;
       });
+
       keyArt = await fetchFirstImage(pageImages);
-      if (keyArt) return { kind: 'keyart', image: keyArt };
+      if (keyArt) return { kind: 'synthetic', image: keyArt, logo, name };
     } catch (_) {}
   }
 
   return null;
+}
+
+function escapeSvgText(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function wrapTitleForSvg(title, maxChars = 21) {
+  const words = String(title || '').trim().split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = '';
+
+  for (const word of words) {
+    const next = line ? `${line} ${word}` : word;
+    if (next.length > maxChars && line) {
+      lines.push(line);
+      line = word;
+      if (lines.length >= 2) break;
+    } else {
+      line = next;
+    }
+  }
+  if (line && lines.length < 3) lines.push(line);
+  return lines.slice(0, 3);
 }
 
 async function normalizeCover(artwork) {
@@ -266,88 +298,95 @@ async function normalizeCover(artwork) {
   if (artwork.kind === 'portrait') {
     return sharp(sourceBuffer)
       .resize(600, 900, { fit: 'cover', position: 'centre' })
-      .webp({ quality: 90 })
+      .webp({ quality: 91 })
       .toBuffer();
   }
 
-  if (artwork.kind === 'hero') {
-    const background = await sharp(sourceBuffer)
-      .resize(600, 900, { fit: 'cover', position: 'centre' })
-      .modulate({ brightness: 0.72, saturation: 1.03 })
-      .webp({ quality: 88 })
-      .toBuffer();
-
-    const gradient = Buffer.from(
-      `<svg width="600" height="900" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#000" stop-opacity=".22"/>
-            <stop offset="52%" stop-color="#000" stop-opacity="0"/>
-            <stop offset="100%" stop-color="#000" stop-opacity=".58"/>
-          </linearGradient>
-        </defs>
-        <rect width="600" height="900" fill="url(#g)"/>
-      </svg>`
-    );
-
-    const composites = [{ input: gradient, top: 0, left: 0 }];
-
-    if (artwork.logo?.buffer) {
-      const logo = await sharp(artwork.logo.buffer)
-        .resize(500, 220, { fit: 'inside', withoutEnlargement: true })
-        .png()
-        .toBuffer();
-
-      const meta = await sharp(logo).metadata();
-      const lw = Number(meta.width || 0);
-      const lh = Number(meta.height || 0);
-
-      if (lw && lh) {
-        composites.push({
-          input: logo,
-          top: Math.max(40, 900 - lh - 65),
-          left: Math.max(20, Math.round((600 - lw) / 2))
-        });
-      }
-    }
-
-    return sharp(background)
-      .composite(composites)
-      .webp({ quality: 90 })
-      .toBuffer();
-  }
-
-  // Fallback for horizontal key art.
-  const meta = await sharp(sourceBuffer).metadata();
-  const width = Number(meta.width || 0);
-  const height = Number(meta.height || 0);
-  if (!width || !height) throw new Error('Invalid source image');
-
-  if (width / height <= 0.9) {
-    return sharp(sourceBuffer)
-      .resize(600, 900, { fit: 'cover', position: 'centre' })
-      .webp({ quality: 90 })
-      .toBuffer();
-  }
+  // Unified poster layout for every game that lacks a native vertical cover.
+  // Top ~64% = official Steam key art, bottom = clean title/logo panel.
+  const topArt = await sharp(sourceBuffer)
+    .resize(600, 585, { fit: 'cover', position: 'centre' })
+    .webp({ quality: 90 })
+    .toBuffer();
 
   const background = await sharp(sourceBuffer)
     .resize(600, 900, { fit: 'cover', position: 'centre' })
-    .blur(28)
-    .modulate({ brightness: 0.38, saturation: 0.9 })
-    .webp({ quality: 82 })
+    .blur(34)
+    .modulate({ brightness: 0.30, saturation: 0.82 })
+    .webp({ quality: 80 })
     .toBuffer();
 
-  const foreground = await sharp(sourceBuffer)
-    .resize(560, 420, {
-      fit: 'contain',
-      background: { r: 0, g: 0, b: 0, alpha: 0 }
-    })
-    .png()
-    .toBuffer();
+  const bottomShade = Buffer.from(
+    `<svg width="600" height="900" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="shade" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#090909" stop-opacity="0"/>
+          <stop offset="56%" stop-color="#090909" stop-opacity=".12"/>
+          <stop offset="68%" stop-color="#090909" stop-opacity=".84"/>
+          <stop offset="100%" stop-color="#090909" stop-opacity=".98"/>
+        </linearGradient>
+      </defs>
+      <rect width="600" height="900" fill="url(#shade)"/>
+    </svg>`
+  );
+
+  const composites = [
+    { input: topArt, top: 0, left: 0 },
+    { input: bottomShade, top: 0, left: 0 }
+  ];
+
+  if (artwork.logo?.buffer) {
+    const logo = await sharp(artwork.logo.buffer)
+      .resize(500, 190, { fit: 'inside', withoutEnlargement: true })
+      .png()
+      .toBuffer();
+    const meta = await sharp(logo).metadata();
+    const lw = Number(meta.width || 0);
+    const lh = Number(meta.height || 0);
+
+    if (lw && lh) {
+      composites.push({
+        input: logo,
+        top: Math.max(625, 735 - Math.round(lh / 2)),
+        left: Math.max(24, Math.round((600 - lw) / 2))
+      });
+    }
+  } else {
+    const lines = wrapTitleForSvg(artwork.name || 'Steam', 21);
+    const lineHeight = 58;
+    const startY = 690 - ((lines.length - 1) * lineHeight) / 2;
+    const tspans = lines.map((line, i) =>
+      `<tspan x="300" y="${Math.round(startY + i * lineHeight)}">${escapeSvgText(line)}</tspan>`
+    ).join('');
+
+    const titleSvg = Buffer.from(
+      `<svg width="600" height="900" xmlns="http://www.w3.org/2000/svg">
+        <text text-anchor="middle"
+              font-family="Arial, Helvetica, sans-serif"
+              font-size="46"
+              font-weight="800"
+              fill="#ffffff"
+              stroke="#000000"
+              stroke-width="2"
+              paint-order="stroke"
+              letter-spacing=".2">
+          ${tspans}
+        </text>
+        <text x="300" y="825"
+              text-anchor="middle"
+              font-family="Arial, Helvetica, sans-serif"
+              font-size="22"
+              font-weight="700"
+              fill="#f5a623"
+              letter-spacing="5">STEAM</text>
+      </svg>`
+    );
+    composites.push({ input: titleSvg, top: 0, left: 0 });
+  }
 
   return sharp(background)
-    .composite([{ input: foreground, gravity: 'center' }])
-    .webp({ quality: 90 })
+    .composite(composites)
+    .webp({ quality: 91 })
     .toBuffer();
 }
 
