@@ -399,23 +399,27 @@
     img.className = 'h-full w-full opacity-0 transition-opacity duration-300';
 
     img.addEventListener('load', () => {
-      // Вертикальные постеры заполняют карточку полностью.
-      // Для горизонтальных изображений делаем "кинопостерный" режим:
-      // само изображение показываем целиком, а пустое пространство
-      // заполняем тем же изображением как размытым фоном.
+      // Держим карточки визуально единообразными:
+      // вертикальные постеры заполняют область целиком,
+      // горизонтальные показываем как аккуратный баннер по центру
+      // на однотонном фоне без дублирования изображения.
       const ratio = img.naturalWidth && img.naturalHeight
         ? img.naturalWidth / img.naturalHeight
         : 1;
 
+      art.style.backgroundImage = 'none';
+      art.style.backgroundColor = '#171311';
+
       if (ratio > 1.05) {
-        art.style.backgroundImage = `linear-gradient(rgba(20,17,17,.38), rgba(20,17,17,.38)), url("${img.src}")`;
-        art.style.backgroundSize = 'cover';
-        art.style.backgroundPosition = 'center';
-        art.style.backgroundRepeat = 'no-repeat';
         img.classList.add('object-contain', 'relative', 'z-10');
-        img.style.padding = '8px';
+        img.style.width = '100%';
+        img.style.height = '100%';
+        img.style.padding = '18% 6%';
       } else {
         img.classList.add('object-cover');
+        img.style.width = '100%';
+        img.style.height = '100%';
+        img.style.padding = '0';
       }
 
       img.classList.remove('opacity-0');
