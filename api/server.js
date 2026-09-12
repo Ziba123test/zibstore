@@ -184,17 +184,10 @@ async function resolvePackageAppId(packageId) {
 }
 
 async function getAppArtwork(appId) {
-  // 1) Native Steam portrait is always preferred.
-  const portraitUrls = [
-    `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`,
-    `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`,
-    `https://cdn.cloudflare.steamstatic.com/steam/apps/${appId}/library_600x900.jpg`
-  ];
-  const portrait = await fetchFirstImage(portraitUrls);
-  if (portrait) return { kind: 'portrait', image: portrait, name: '' };
-
-  // 2) Resolve metadata independently from pricing region.
+  // Product covers should use key art, not arbitrary gameplay screenshots.
+  // Artwork lookup stays independent from pricing regions.
   let exact = {};
+
   for (const cc of ['us', 'kz', 'ru']) {
     try {
       const data = await fetchJson(
@@ -208,34 +201,29 @@ async function getAppArtwork(appId) {
     } catch (_) {}
   }
 
-  const name = String(exact.name || '').trim();
+  const portraitUrls = [
+    `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`,
+    `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`
+  ];
 
-  // Steam library hero/logo give the nicest fallback when available.
-  const hero = await fetchFirstImage([
-    `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_hero.jpg`,
-    `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/library_hero.jpg`,
-    exact.background_raw,
-    exact.background
-  ]);
-
-  const logo = await fetchFirstImage([
-    `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/logo.png`,
-    `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/logo.png`
-  ]);
-
-  if (hero) return { kind: 'synthetic', image: hero, logo, name };
-
-  // Official store key art, no screenshots.
-  let keyArt = await fetchFirstImage([
+  const keyArtUrls = [
     exact.header_image,
     exact.capsule_image,
     exact.capsule_imagev5,
     exact.background_raw,
     exact.background
-  ]);
-  if (keyArt) return { kind: 'synthetic', image: keyArt, logo, name };
+  ];
 
-  // Final Steam-page fallback, but only app-specific non-screenshot assets.
+  // 1) Prefer a true vertical Steam library poster.
+  let found = await fetchFirstImage(portraitUrls);
+  if (found) return found;
+
+  // 2) Otherwise use official key art only.
+  found = await fetchFirstImage(keyArtUrls);
+  if (found) return found;
+
+  // 3) Store-page fallback. Accept only app-specific key-art style URLs.
+  // Screenshots are intentionally excluded.
   for (const cc of ['us', 'kz', 'ru']) {
     try {
       const html = await fetchText(
@@ -255,138 +243,62 @@ async function getAppArtwork(appId) {
         return belongsToApp && !generic && !screenshotLike;
       });
 
-      keyArt = await fetchFirstImage(pageImages);
-      if (keyArt) return { kind: 'synthetic', image: keyArt, logo, name };
+      found = await fetchFirstImage(pageImages);
+      if (found) return found;
     } catch (_) {}
   }
 
   return null;
 }
 
-function escapeSvgText(value) {
-  return String(value || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
+async function normalizeCover(sourceBuffer) {
+  const meta = await sharp(sourceBuffer).metadata();
+  const width = Number(meta.width || 0);
+  const height = Number(meta.height || 0);
+  if (!width || !height) throw new Error('Invalid source image');
 
-function wrapTitleForSvg(title, maxChars = 21) {
-  const words = String(title || '').trim().split(/\s+/).filter(Boolean);
-  const lines = [];
-  let line = '';
+  const ratio = width / height;
 
-  for (const word of words) {
-    const next = line ? `${line} ${word}` : word;
-    if (next.length > maxChars && line) {
-      lines.push(line);
-      line = word;
-      if (lines.length >= 2) break;
-    } else {
-      line = next;
-    }
-  }
-  if (line && lines.length < 3) lines.push(line);
-  return lines.slice(0, 3);
-}
-
-async function normalizeCover(artwork) {
-  if (!artwork?.image?.buffer) throw new Error('Missing artwork image');
-
-  const sourceBuffer = artwork.image.buffer;
-
-  if (artwork.kind === 'portrait') {
+  // Native portrait artwork: use it directly as a 2:3 cover.
+  if (ratio <= 0.9) {
     return sharp(sourceBuffer)
       .resize(600, 900, { fit: 'cover', position: 'centre' })
-      .webp({ quality: 91 })
+      .webp({ quality: 90 })
       .toBuffer();
   }
 
-  // Unified poster layout for every game that lacks a native vertical cover.
-  // Top ~64% = official Steam key art, bottom = clean title/logo panel.
-  const topArt = await sharp(sourceBuffer)
-    .resize(600, 585, { fit: 'cover', position: 'centre' })
-    .webp({ quality: 90 })
-    .toBuffer();
-
+  // Landscape/square key art:
+  // one coherent 600x900 poster = dark blurred background + centered full key art.
   const background = await sharp(sourceBuffer)
     .resize(600, 900, { fit: 'cover', position: 'centre' })
-    .blur(34)
-    .modulate({ brightness: 0.30, saturation: 0.82 })
-    .webp({ quality: 80 })
+    .blur(30)
+    .modulate({ brightness: 0.38, saturation: 0.86 })
+    .webp({ quality: 82 })
     .toBuffer();
 
-  const bottomShade = Buffer.from(
-    `<svg width="600" height="900" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <linearGradient id="shade" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="#090909" stop-opacity="0"/>
-          <stop offset="56%" stop-color="#090909" stop-opacity=".12"/>
-          <stop offset="68%" stop-color="#090909" stop-opacity=".84"/>
-          <stop offset="100%" stop-color="#090909" stop-opacity=".98"/>
-        </linearGradient>
-      </defs>
-      <rect width="600" height="900" fill="url(#shade)"/>
-    </svg>`
-  );
+  const foreground = await sharp(sourceBuffer)
+    .resize(540, 360, {
+      fit: 'contain',
+      background: { r: 0, g: 0, b: 0, alpha: 0 }
+    })
+    .png()
+    .toBuffer();
 
-  const composites = [
-    { input: topArt, top: 0, left: 0 },
-    { input: bottomShade, top: 0, left: 0 }
-  ];
-
-  if (artwork.logo?.buffer) {
-    const logo = await sharp(artwork.logo.buffer)
-      .resize(500, 190, { fit: 'inside', withoutEnlargement: true })
-      .png()
-      .toBuffer();
-    const meta = await sharp(logo).metadata();
-    const lw = Number(meta.width || 0);
-    const lh = Number(meta.height || 0);
-
-    if (lw && lh) {
-      composites.push({
-        input: logo,
-        top: Math.max(625, 735 - Math.round(lh / 2)),
-        left: Math.max(24, Math.round((600 - lw) / 2))
-      });
+  const panel = await sharp({
+    create: {
+      width: 570,
+      height: 390,
+      channels: 4,
+      background: { r: 10, g: 10, b: 12, alpha: 0.62 }
     }
-  } else {
-    const lines = wrapTitleForSvg(artwork.name || 'Steam', 21);
-    const lineHeight = 58;
-    const startY = 690 - ((lines.length - 1) * lineHeight) / 2;
-    const tspans = lines.map((line, i) =>
-      `<tspan x="300" y="${Math.round(startY + i * lineHeight)}">${escapeSvgText(line)}</tspan>`
-    ).join('');
-
-    const titleSvg = Buffer.from(
-      `<svg width="600" height="900" xmlns="http://www.w3.org/2000/svg">
-        <text text-anchor="middle"
-              font-family="Arial, Helvetica, sans-serif"
-              font-size="46"
-              font-weight="800"
-              fill="#ffffff"
-              stroke="#000000"
-              stroke-width="2"
-              paint-order="stroke"
-              letter-spacing=".2">
-          ${tspans}
-        </text>
-        <text x="300" y="825"
-              text-anchor="middle"
-              font-family="Arial, Helvetica, sans-serif"
-              font-size="22"
-              font-weight="700"
-              fill="#f5a623"
-              letter-spacing="5">STEAM</text>
-      </svg>`
-    );
-    composites.push({ input: titleSvg, top: 0, left: 0 });
-  }
+  }).png().toBuffer();
 
   return sharp(background)
-    .composite(composites)
-    .webp({ quality: 91 })
+    .composite([
+      { input: panel, top: 255, left: 15 },
+      { input: foreground, top: 270, left: 30 }
+    ])
+    .webp({ quality: 90 })
     .toBuffer();
 }
 
@@ -402,12 +314,12 @@ async function getOrCreateCover(steamType, steamId, refresh = false) {
   const cachePath = path.join(COVER_DIR, `app-${appId}.webp`);
   if (!refresh && fs.existsSync(cachePath)) return { cachePath, appId };
 
-  const artwork = await getAppArtwork(appId);
-  if (!artwork) throw new Error(`Steam artwork unavailable for AppID ${appId}`);
+  const found = await getAppArtwork(appId);
+  if (!found) throw new Error(`Steam artwork unavailable for AppID ${appId}`);
 
-  const normalized = await normalizeCover(artwork);
+  const normalized = await normalizeCover(found.buffer);
   fs.writeFileSync(cachePath, normalized);
-  return { cachePath, appId, source: artwork.image?.source || null };
+  return { cachePath, appId, source: found.source };
 }
 
 function sendCover(res, buffer) {
