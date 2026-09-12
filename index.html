@@ -333,9 +333,8 @@
       const params = new URLSearchParams();
       if (target.type === 'package') params.set('packageid', target.id);
       else params.set('appid', target.id);
-      // KZ — основной регион сравнения для нашего магазина. Сама функция при необходимости
-      // сделает fallback на UA -> US и вернёт фактический регион в steam.cc.
-      params.set('cc', target.region || 'kz');
+      // RU — основной регион. Backend при необходимости сам выполнит fallback.
+      params.set('cc', target.region || 'ru');
       const res = await fetch(`${STEAM_API_BASE}?${params.toString()}`);
       if (!res.ok) throw new Error(`Steam proxy HTTP ${res.status}`);
       return await res.json();
@@ -356,6 +355,38 @@
     return steam.currency === 'RUB' ? `Steam ${region}` : `Steam ${region} · по курсу ЦБ РФ`;
   }
 
+  function setSteamArtwork(productId, steam) {
+    if (!steam || steam.steamType !== 'app' || !steam.steamId) return;
+    const art = document.getElementById(`steam-art-${productId}`);
+    if (!art) return;
+
+    const appId = encodeURIComponent(String(steam.steamId));
+    const portrait = `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`;
+    const header = `https://cdn.akamai.steamstatic.com/steam/apps/${appId}/header.jpg`;
+    const fallback = art.querySelector('[data-art-fallback]');
+
+    const img = document.createElement('img');
+    img.src = portrait;
+    img.alt = '';
+    img.loading = 'lazy';
+    img.referrerPolicy = 'no-referrer';
+    img.className = 'h-full w-full object-cover opacity-0 transition-opacity duration-300';
+    img.addEventListener('load', () => {
+      img.classList.remove('opacity-0');
+      if (fallback) fallback.classList.add('hidden');
+    });
+    img.addEventListener('error', () => {
+      if (img.dataset.fallbackTried === '1') {
+        img.remove();
+        if (fallback) fallback.classList.remove('hidden');
+        return;
+      }
+      img.dataset.fallbackTried = '1';
+      img.src = header;
+    });
+    art.prepend(img);
+  }
+
   async function enhanceWithSteamPrices(products) {
     const targets = products
       .map(product => ({ product, target: getSteamTarget(product) }))
@@ -374,6 +405,8 @@
         return;
       }
 
+      setSteamArtwork(product.id, steam);
+
       const ourPrice = Number(product.price_rub ?? product.price ?? product.base_price);
       const steamRub = Number(steam.final_rub);
       if (!Number.isFinite(ourPrice) || !Number.isFinite(steamRub) || steamRub <= 0) {
@@ -383,30 +416,31 @@
 
       const diff = ourPrice - steamRub;
       const storeIsCheaper = diff < 0;
+      const absoluteDiff = Math.round(Math.abs(diff));
       const denominator = storeIsCheaper ? steamRub : ourPrice;
-      const pct = Math.round(Math.abs(diff) / denominator * 100);
+      const pct = denominator > 0 ? Math.round(Math.abs(diff) / denominator * 100) : 0;
       const shownSteamRub = Math.round(steamRub).toLocaleString('ru-RU');
-      const originalPrice = formatSteamOriginalPrice(steam);
+      const shownOurPrice = Math.round(ourPrice).toLocaleString('ru-RU');
 
       const foundRegion = STEAM_REGION_LABELS[steam.cc] || String(steam.cc || '').toUpperCase();
-      const requestedRegion = 'RU';
-      const fallbackNote = foundRegion && foundRegion !== requestedRegion
-        ? ` · найдено в ${foundRegion}`
+      const fallbackNote = foundRegion && foundRegion !== 'RU'
+        ? `<div class="mt-1 text-[10px] text-nox-muted">Цена Steam: ${escapeHtml(foundRegion)}${steam.currency !== 'RUB' ? ' · пересчитано в ₽' : ''}</div>`
         : '';
 
-      const savingsBadge = storeIsCheaper
-        ? `<span class="inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-300">${escapeHtml(`Экономия ${pct}%`)}</span>`
-        : diff > 0
-          ? `<span class="inline-flex items-center rounded-full bg-amber-500/10 px-2 py-1 text-[11px] font-semibold text-amber-300">${escapeHtml(`Steam дешевле на ${pct}%`)}</span>`
-          : `<span class="inline-flex items-center rounded-full bg-white/5 px-2 py-1 text-[11px] font-semibold text-nox-muted">Цена одинаковая</span>`;
-
-      const steamLine = `${escapeHtml(originalPrice)} · ≈ ${shownSteamRub} ₽`;
-      const steamMeta = `Steam${fallbackNote ? escapeHtml(fallbackNote) : ''}`;
+      let verdict = '';
+      if (storeIsCheaper) {
+        verdict = `<span class="inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-300">Выгода ${absoluteDiff.toLocaleString('ru-RU')} ₽ (${pct}%)</span>`;
+      } else if (diff > 0) {
+        verdict = `<span class="inline-flex items-center rounded-full bg-amber-500/10 px-2 py-1 text-[11px] font-semibold text-amber-300">Steam дешевле на ${absoluteDiff.toLocaleString('ru-RU')} ₽ (${pct}%)</span>`;
+      } else {
+        verdict = `<span class="inline-flex items-center rounded-full bg-white/5 px-2 py-1 text-[11px] font-semibold text-nox-muted">Цена одинаковая</span>`;
+      }
 
       el.innerHTML = `
         <div class="min-w-0">
-          <div class="mt-1">${savingsBadge}</div>
-          <div class="mt-1.5 text-[11px] text-nox-muted">${steamMeta} · ${steamLine}</div>
+          <div>${verdict}</div>
+          <div class="mt-1.5 text-[11px] text-nox-muted">Steam: ${shownSteamRub} ₽ · у нас: ${shownOurPrice} ₽</div>
+          ${fallbackNote}
         </div>
       `;
 
@@ -580,8 +614,8 @@
         : '#';
       return `
       <div class="group rounded-2xl border border-nox-border bg-nox-card overflow-hidden flex flex-col hover:border-nox-accent/50 transition">
-        <div class="aspect-[3/4] bg-gradient-to-br from-nox-accent/10 to-nox-bg flex items-center justify-center">
-          <span class="font-display text-3xl text-nox-accent/30 px-2 text-center">${escapeHtml(p.name).slice(0, 2).toUpperCase()}</span>
+        <div id="steam-art-${p.id}" class="relative aspect-[3/4] overflow-hidden bg-gradient-to-br from-nox-accent/10 to-nox-bg flex items-center justify-center">
+          <span data-art-fallback class="font-display text-3xl text-nox-accent/30 px-2 text-center">${escapeHtml(p.name).slice(0, 2).toUpperCase()}</span>
         </div>
         <div class="p-3 flex flex-col flex-1">
           <h3 class="text-sm font-medium leading-snug line-clamp-2 flex-1">${escapeHtml(p.name)}</h3>
