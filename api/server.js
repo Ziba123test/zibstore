@@ -306,25 +306,43 @@ async function getOrCreateCover(steamType, steamId, refresh = false) {
   let appId = steamType === 'app' ? String(steamId) : null;
   if (!appId && steamType === 'package') appId = await resolvePackageAppId(steamId);
 
-  // Historical matcher records can still have the wrong type. If a package cannot
-  // be resolved, safely try the numeric ID as an AppID (same fallback as steam-price).
   if (!appId && /^\d+$/.test(String(steamId))) appId = String(steamId);
   if (!appId) throw new Error('Could not resolve AppID for artwork');
 
   const cachePath = path.join(COVER_DIR, `app-${appId}.webp`);
-  if (!refresh && fs.existsSync(cachePath)) return { cachePath, appId };
+  const metaPath = path.join(COVER_DIR, `app-${appId}.json`);
+
+  if (!refresh && fs.existsSync(cachePath)) {
+    let meta = { quality: 'unknown', source: null, appId };
+    try {
+      meta = { ...meta, ...JSON.parse(fs.readFileSync(metaPath, 'utf8')) };
+    } catch (_) {}
+    return { cachePath, appId, ...meta };
+  }
 
   const found = await getAppArtwork(appId);
   if (!found) throw new Error(`Steam artwork unavailable for AppID ${appId}`);
 
   const normalized = await normalizeCover(found.buffer);
   fs.writeFileSync(cachePath, normalized);
-  return { cachePath, appId, source: found.source };
+
+  const source = String(found.source || '');
+  const quality = /library_600x900/i.test(source) ? 'native' : 'fallback';
+  const meta = { appId, quality, source, generatedAt: new Date().toISOString() };
+
+  try {
+    fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+  } catch (_) {}
+
+  return { cachePath, ...meta };
 }
 
-function sendCover(res, buffer) {
+function sendCover(res, buffer, meta = {}) {
   res.writeHead(200, {
     'Access-Control-Allow-Origin': '*',
+    'Access-Control-Expose-Headers': 'X-ZibStore-Cover-Quality, X-ZibStore-Cover-AppId',
+    'X-ZibStore-Cover-Quality': String(meta.quality || 'unknown'),
+    'X-ZibStore-Cover-AppId': String(meta.appId || ''),
     'Content-Type': 'image/webp',
     'Content-Length': buffer.length,
     'Cache-Control': 'public, max-age=3600, stale-while-revalidate=86400'
@@ -418,7 +436,7 @@ const server = http.createServer(async (req, res) => {
 
     try {
       const result = await getOrCreateCover(steamType, steamId, refresh);
-      return sendCover(res, fs.readFileSync(result.cachePath));
+      return sendCover(res, fs.readFileSync(result.cachePath), result);
     } catch (err) {
       console.error('cover error:', steamType, steamId, err.message);
       return json(res, 404, { ok: false, error: err.message });
