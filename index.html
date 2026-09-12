@@ -282,6 +282,7 @@
     ru: 'RU', kz: 'KZ', ua: 'UA', us: 'US', de: 'DE', tr: 'TR'
   };
 
+  // ZibStore frontend v17
   // ---------------- Серверные сопоставления Steam ----------------
   // Единый источник истины — наш VPS. localStorage больше не используется
   // как источник сопоставлений для основного магазина.
@@ -296,7 +297,14 @@
       if (!data || typeof data !== 'object' || Array.isArray(data)) {
         throw new Error('Некорректный формат Steam matches');
       }
-      serverSteamMatches = data;
+
+      // API v13+ возвращает { version, matches }, старые версии могли
+      // возвращать сам объект сопоставлений напрямую. Поддерживаем оба формата.
+      const matches = data.matches && typeof data.matches === 'object' && !Array.isArray(data.matches)
+        ? data.matches
+        : data;
+
+      serverSteamMatches = matches;
       return true;
     } catch (err) {
       console.warn('Не удалось загрузить серверные Steam-сопоставления:', err);
@@ -439,7 +447,7 @@
       el.innerHTML = `
         <div class="min-w-0">
           <div>${verdict}</div>
-          <div class="mt-1.5 text-[11px] text-nox-muted">Steam: ${shownSteamRub} ₽ · у нас: ${shownOurPrice} ₽</div>
+          <div class="mt-1.5 text-[11px] text-nox-muted">Steam: ${shownSteamRub} ₽</div>
           ${fallbackNote}
         </div>
       `;
