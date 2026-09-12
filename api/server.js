@@ -1,4 +1,5 @@
 const http = require('http');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
@@ -13,8 +14,8 @@ fs.mkdirSync(COVER_DIR, { recursive: true });
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   'Content-Type': 'application/json; charset=utf-8',
   'Cache-Control': 'public, max-age=60'
 };
@@ -404,6 +405,106 @@ function json(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+function adminJson(res, status, body) {
+  res.writeHead(status, {
+    ...CORS,
+    'Cache-Control': 'no-store, max-age=0'
+  });
+  res.end(JSON.stringify(body));
+}
+
+const ADMIN_USERNAME = String(process.env.ADMIN_USERNAME || '');
+const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || '');
+const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const adminSessions = new Map();
+const loginAttempts = new Map();
+
+function safeEqualText(a, b) {
+  const left = Buffer.from(String(a || ''), 'utf8');
+  const right = Buffer.from(String(b || ''), 'utf8');
+  if (left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+}
+
+function getClientIp(req) {
+  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return forwarded || req.socket?.remoteAddress || 'unknown';
+}
+
+function cleanupAdminSessions() {
+  const now = Date.now();
+  for (const [token, session] of adminSessions.entries()) {
+    if (!session || session.expiresAt <= now) adminSessions.delete(token);
+  }
+}
+
+function createAdminSession(username) {
+  cleanupAdminSessions();
+  const token = crypto.randomBytes(32).toString('hex');
+  adminSessions.set(token, {
+    username,
+    expiresAt: Date.now() + ADMIN_SESSION_TTL_MS
+  });
+  return token;
+}
+
+function getBearerToken(req) {
+  const header = String(req.headers.authorization || '');
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : '';
+}
+
+function requireAdmin(req, res) {
+  cleanupAdminSessions();
+
+  if (!ADMIN_USERNAME || !ADMIN_PASSWORD) {
+    adminJson(res, 503, {
+      ok: false,
+      error: 'Admin credentials are not configured on the server'
+    });
+    return null;
+  }
+
+  const token = getBearerToken(req);
+  const session = token ? adminSessions.get(token) : null;
+
+  if (!session || session.expiresAt <= Date.now()) {
+    if (token) adminSessions.delete(token);
+    adminJson(res, 401, { ok: false, error: 'Unauthorized' });
+    return null;
+  }
+
+  // Sliding expiration while the admin is actively using the page.
+  session.expiresAt = Date.now() + ADMIN_SESSION_TTL_MS;
+  return { token, session };
+}
+
+function loginRateLimited(ip) {
+  const now = Date.now();
+  const windowMs = 10 * 60 * 1000;
+  const maxAttempts = 10;
+  const entry = loginAttempts.get(ip);
+
+  if (!entry || now - entry.startedAt > windowMs) {
+    loginAttempts.set(ip, { startedAt: now, count: 0 });
+    return false;
+  }
+
+  return entry.count >= maxAttempts;
+}
+
+function recordLoginFailure(ip) {
+  const now = Date.now();
+  const windowMs = 10 * 60 * 1000;
+  const entry = loginAttempts.get(ip);
+
+  if (!entry || now - entry.startedAt > windowMs) {
+    loginAttempts.set(ip, { startedAt: now, count: 1 });
+  } else {
+    entry.count += 1;
+  }
+}
+
 async function readJsonBody(req, limit = 1024 * 1024) {
   const chunks = [];
   let size = 0;
@@ -475,7 +576,58 @@ const server = http.createServer(async (req, res) => {
 
 
 
+  if (url.pathname === '/api/admin/login' && req.method === 'POST') {
+    const ip = getClientIp(req);
+
+    if (!ADMIN_USERNAME || !ADMIN_PASSWORD) {
+      return adminJson(res, 503, {
+        ok: false,
+        error: 'Admin credentials are not configured on the server'
+      });
+    }
+
+    if (loginRateLimited(ip)) {
+      return adminJson(res, 429, {
+        ok: false,
+        error: 'Too many login attempts. Try again later.'
+      });
+    }
+
+    try {
+      const body = await readJsonBody(req, 16 * 1024);
+      const username = String(body.username || '');
+      const password = String(body.password || '');
+
+      const validUser = safeEqualText(username, ADMIN_USERNAME);
+      const validPassword = safeEqualText(password, ADMIN_PASSWORD);
+
+      if (!validUser || !validPassword) {
+        recordLoginFailure(ip);
+        return adminJson(res, 401, { ok: false, error: 'Неверный логин или пароль' });
+      }
+
+      loginAttempts.delete(ip);
+      const token = createAdminSession(username);
+
+      return adminJson(res, 200, {
+        ok: true,
+        token,
+        expiresIn: Math.floor(ADMIN_SESSION_TTL_MS / 1000)
+      });
+    } catch (err) {
+      return adminJson(res, 400, { ok: false, error: err.message });
+    }
+  }
+
+  if (url.pathname === '/api/admin/logout' && req.method === 'POST') {
+    const token = getBearerToken(req);
+    if (token) adminSessions.delete(token);
+    return adminJson(res, 200, { ok: true });
+  }
+
   if (url.pathname === '/api/admin/covers' && req.method === 'GET') {
+    if (!requireAdmin(req, res)) return;
+
     const matches = readSteamMatchesFile();
     const items = Object.entries(matches).map(([productId, item]) => ({
       productId,
@@ -487,18 +639,20 @@ const server = http.createServer(async (req, res) => {
       coverAppId: item.coverAppId || '',
       coverUrl: item.coverUrl || ''
     }));
-    return json(res, 200, { ok: true, items });
+    return adminJson(res, 200, { ok: true, items });
   }
 
   if (url.pathname === '/api/admin/covers' && req.method === 'POST') {
+    if (!requireAdmin(req, res)) return;
+
     try {
       const body = await readJsonBody(req);
       const productId = String(body.productId || '').trim();
-      if (!productId) return json(res, 400, { ok: false, error: 'productId is required' });
+      if (!productId) return adminJson(res, 400, { ok: false, error: 'productId is required' });
 
       const matches = readSteamMatchesFile();
       if (!matches[productId]) {
-        return json(res, 404, { ok: false, error: 'Product mapping not found' });
+        return adminJson(res, 404, { ok: false, error: 'Product mapping not found' });
       }
 
       const patch = sanitizeCoverPatch(body);
@@ -511,9 +665,9 @@ const server = http.createServer(async (req, res) => {
       matches[productId] = next;
       writeSteamMatchesFile(matches);
 
-      return json(res, 200, { ok: true, productId, item: next });
+      return adminJson(res, 200, { ok: true, productId, item: next });
     } catch (err) {
-      return json(res, 400, { ok: false, error: err.message });
+      return adminJson(res, 400, { ok: false, error: err.message });
     }
   }
 
