@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <!-- ZibStore frontend v31: normalized covers; cover cache rev 2 -->
+  <!-- ZibStore frontend v34: cover cache rev 3 -->
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>ЗибСтор — Ключи игр | Честное сравнение цен</title>
@@ -364,7 +364,7 @@
     return steam.currency === 'RUB' ? `Steam ${region}` : `Steam ${region} · по курсу ЦБ РФ`;
   }
 
-  const COVER_CACHE_VERSION = '2';
+  const COVER_CACHE_VERSION = '3';
 
   function setSteamArtwork(productId, steam) {
     if (!steam || !steam.steamId || !steam.steamType) return;
