@@ -369,29 +369,37 @@
     if (!art) return;
 
     const appId = encodeURIComponent(String(steam.steamId));
-    const portrait = `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`;
-    const header = `https://cdn.akamai.steamstatic.com/steam/apps/${appId}/header.jpg`;
+    const sources = [
+      `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`,
+      `https://cdn.akamai.steamstatic.com/steam/apps/${appId}/header.jpg`,
+      `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/capsule_616x353.jpg`
+    ];
     const fallback = art.querySelector('[data-art-fallback]');
 
     const img = document.createElement('img');
-    img.src = portrait;
+    let sourceIndex = 0;
+
     img.alt = '';
     img.loading = 'lazy';
     img.referrerPolicy = 'no-referrer';
     img.className = 'h-full w-full object-cover opacity-0 transition-opacity duration-300';
+
     img.addEventListener('load', () => {
       img.classList.remove('opacity-0');
       if (fallback) fallback.classList.add('hidden');
     });
+
     img.addEventListener('error', () => {
-      if (img.dataset.fallbackTried === '1') {
+      sourceIndex += 1;
+      if (sourceIndex >= sources.length) {
         img.remove();
         if (fallback) fallback.classList.remove('hidden');
         return;
       }
-      img.dataset.fallbackTried = '1';
-      img.src = header;
+      img.src = sources[sourceIndex];
     });
+
+    img.src = sources[sourceIndex];
     art.prepend(img);
   }
 
