@@ -1,15 +1,29 @@
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const { URL } = require('url');
 
 const PORT = 3000;
+const HOST = '127.0.0.1';
+const MATCHES_FILE = '/var/www/zibstore/data/steam-matches.json';
 const REGION_ORDER = ['ru', 'kz', 'ua', 'us'];
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
-  'Content-Type': 'application/json; charset=utf-8'
+  'Content-Type': 'application/json; charset=utf-8',
+  'Cache-Control': 'public, max-age=60'
 };
+
+function readMatches() {
+  try {
+    return JSON.parse(fs.readFileSync(MATCHES_FILE, 'utf8'));
+  } catch (err) {
+    console.error('Failed to read matches:', err.message);
+    return {};
+  }
+}
 
 async function fetchJson(url) {
   const res = await fetch(url, {
@@ -19,10 +33,7 @@ async function fetchJson(url) {
     }
   });
 
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}`);
-  }
-
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
 
@@ -30,15 +41,10 @@ async function getAppPrice(appid, cc) {
   const data = await fetchJson(
     `https://store.steampowered.com/api/appdetails?appids=${appid}&cc=${cc}&filters=price_overview`
   );
-
   const entry = data?.[appid];
-
-  if (!entry?.success || !entry.data?.price_overview) {
-    return null;
-  }
+  if (!entry?.success || !entry.data?.price_overview) return null;
 
   const p = entry.data.price_overview;
-
   return {
     steamType: 'app',
     steamId: Number(appid),
@@ -55,15 +61,10 @@ async function getPackagePrice(packageid, cc) {
   const data = await fetchJson(
     `https://store.steampowered.com/api/packagedetails?packageids=${packageid}&cc=${cc}`
   );
-
   const entry = data?.[packageid];
-
-  if (!entry?.success || !entry.data?.price) {
-    return null;
-  }
+  if (!entry?.success || !entry.data?.price) return null;
 
   const p = entry.data.price;
-
   return {
     steamType: 'package',
     steamId: Number(packageid),
@@ -77,29 +78,17 @@ async function getPackagePrice(packageid, cc) {
 }
 
 async function getCbrRate(currency) {
-  if (currency === 'RUB') {
-    return { rate: 1, date: null };
-  }
+  if (currency === 'RUB') return { rate: 1, date: null };
 
-  const data = await fetchJson(
-    'https://www.cbr-xml-daily.ru/daily_json.js'
-  );
+  const data = await fetchJson('https://www.cbr-xml-daily.ru/daily_json.js');
+  const value = data?.Valute?.[currency];
+  if (!value) throw new Error(`ЦБ РФ не публикует курс ${currency}`);
 
-  const v = data?.Valute?.[currency];
-
-  if (!v) {
-    throw new Error(`ЦБ РФ не публикует курс ${currency}`);
-  }
-
-  return {
-    rate: v.Value / v.Nominal,
-    date: data.Date
-  };
+  return { rate: value.Value / value.Nominal, date: data.Date };
 }
 
 async function withRub(info) {
   const cbr = await getCbrRate(info.currency);
-
   return {
     ...info,
     final_rub: Math.round(info.final * cbr.rate * 100) / 100,
@@ -114,25 +103,17 @@ async function withRub(info) {
   };
 }
 
-async function findPrice(type, id, requestedCc) {
-  const regions = requestedCc && REGION_ORDER.includes(requestedCc)
-    ? [requestedCc, ...REGION_ORDER.filter(x => x !== requestedCc)]
-    : REGION_ORDER;
+async function findPrice(type, id, requestedCc = 'ru') {
+  const order = [requestedCc, ...REGION_ORDER.filter(r => r !== requestedCc)];
 
-  for (const cc of regions) {
+  for (const cc of order) {
     try {
       const info = type === 'package'
         ? await getPackagePrice(id, cc)
         : await getAppPrice(id, cc);
-
-      if (info) {
-        return withRub(info);
-      }
-    } catch (_) {
-      // Try next region.
-    }
+      if (info) return await withRub(info);
+    } catch (_) {}
   }
-
   return null;
 }
 
@@ -150,9 +131,13 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   if (url.pathname === '/health') {
+    return json(res, 200, { ok: true, service: 'zibstore-api' });
+  }
+
+  if (url.pathname === '/api/steam-matches') {
     return json(res, 200, {
-      ok: true,
-      service: 'zibstore-api'
+      version: 1,
+      matches: readMatches()
     });
   }
 
@@ -162,7 +147,7 @@ const server = http.createServer(async (req, res) => {
 
   const appid = url.searchParams.get('appid');
   const packageid = url.searchParams.get('packageid');
-  const requestedCc = (url.searchParams.get('cc') || 'ru').toLowerCase();
+  const cc = (url.searchParams.get('cc') || 'ru').toLowerCase();
 
   let type;
   let id;
@@ -181,8 +166,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
-    const info = await findPrice(type, id, requestedCc);
-
+    const info = await findPrice(type, id, cc);
     if (!info) {
       return json(res, 200, {
         available: false,
@@ -191,19 +175,12 @@ const server = http.createServer(async (req, res) => {
         reason: 'no_price_in_supported_regions'
       });
     }
-
-    return json(res, 200, {
-      available: true,
-      ...info
-    });
+    return json(res, 200, { available: true, ...info });
   } catch (err) {
-    return json(res, 200, {
-      available: false,
-      error: err.message
-    });
+    return json(res, 200, { available: false, error: err.message });
   }
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`ZibStore API listening on http://127.0.0.1:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`ZibStore API listening on http://${HOST}:${PORT}`);
 });
