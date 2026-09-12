@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
+  <!-- ZibStore frontend v28: normalized artwork via /api/cover only -->
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>ЗибСтор — Ключи игр | Честное сравнение цен</title>
@@ -370,25 +371,30 @@
     if (!art) return;
 
     const fallback = art.querySelector('[data-art-fallback]');
-    const coverUrl = `https://api.zibstore.ru/api/cover?steamType=${encodeURIComponent(steam.steamType)}&steamId=${encodeURIComponent(steam.steamId)}&v=3`;
+    const coverUrl = new URL('https://api.zibstore.ru/api/cover');
+    coverUrl.searchParams.set('steamType', steam.steamType);
+    coverUrl.searchParams.set('steamId', String(steam.steamId));
 
     const img = document.createElement('img');
-    img.src = coverUrl;
+    img.src = coverUrl.toString();
     img.alt = '';
     img.loading = 'lazy';
+    img.decoding = 'async';
     img.referrerPolicy = 'no-referrer';
-    img.className = 'h-full w-full object-cover opacity-0 transition-opacity duration-300';
+    img.dataset.steamCover = '1';
+    img.className = 'absolute inset-0 h-full w-full object-cover opacity-0 transition-opacity duration-300';
 
     img.addEventListener('load', () => {
       img.classList.remove('opacity-0');
       if (fallback) fallback.classList.add('hidden');
-    });
+    }, { once: true });
 
     img.addEventListener('error', () => {
       img.remove();
       if (fallback) fallback.classList.remove('hidden');
-    });
+    }, { once: true });
 
+    art.querySelectorAll('img[data-steam-cover]').forEach(node => node.remove());
     art.style.backgroundImage = 'none';
     art.style.backgroundColor = '#171311';
     art.prepend(img);
