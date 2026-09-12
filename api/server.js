@@ -1,12 +1,15 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const sharp = require('sharp');
 const { URL } = require('url');
 
 const PORT = 3000;
 const HOST = '127.0.0.1';
 const MATCHES_FILE = '/var/www/zibstore/data/steam-matches.json';
 const REGION_ORDER = ['ru', 'kz', 'ua', 'us'];
+const COVER_DIR = '/var/www/zibstore/api/covers';
+fs.mkdirSync(COVER_DIR, { recursive: true });
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -81,6 +84,157 @@ async function getPackagePrice(packageid, cc) {
   };
 }
 
+
+async function fetchBuffer(url, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+        'User-Agent': 'Mozilla/5.0 (compatible; ZibStore/1.0)'
+      }
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const type = String(res.headers.get('content-type') || '');
+    if (!type.startsWith('image/')) throw new Error(`Not an image: ${type || 'unknown'}`);
+    return Buffer.from(await res.arrayBuffer());
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchFirstImage(urls) {
+  const tried = [];
+  for (const raw of urls) {
+    const url = String(raw || '').trim();
+    if (!url || tried.includes(url)) continue;
+    tried.push(url);
+    try {
+      return { buffer: await fetchBuffer(url), source: url };
+    } catch (_) {}
+  }
+  return null;
+}
+
+async function resolvePackageAppId(packageId) {
+  try {
+    const data = await fetchJson(
+      `https://store.steampowered.com/api/packagedetails?packageids=${packageId}&cc=ru&l=english`
+    );
+    const entry = data?.[String(packageId)];
+    const apps = entry?.success && Array.isArray(entry?.data?.apps) ? entry.data.apps : [];
+    const app = apps.find(x => /^\d+$/.test(String(x?.id ?? x?.appid ?? '')));
+    return app ? String(app.id ?? app.appid) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function getAppArtwork(appId) {
+  let exact = {};
+  try {
+    // No filters here: Steam then returns the canonical image URLs including hashes.
+    const data = await fetchJson(
+      `https://store.steampowered.com/api/appdetails?appids=${appId}&cc=ru&l=english`
+    );
+    exact = data?.[String(appId)]?.success ? (data[String(appId)].data || {}) : {};
+  } catch (_) {}
+
+  const hashed = [
+    exact.header_image,
+    exact.capsule_image,
+    exact.capsule_imagev5,
+    exact.background_raw,
+    exact.background
+  ];
+
+  const guessedPortrait = [
+    `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`,
+    `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`
+  ];
+
+  const guessedLandscape = [
+    `https://cdn.akamai.steamstatic.com/steam/apps/${appId}/header.jpg`,
+    `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/capsule_616x353.jpg`
+  ];
+
+  // Portrait first when it exists; otherwise exact Steam URLs are the most reliable.
+  let found = await fetchFirstImage(guessedPortrait);
+  if (!found) found = await fetchFirstImage(hashed);
+  if (!found) found = await fetchFirstImage(guessedLandscape);
+  return found;
+}
+
+async function normalizeCover(sourceBuffer) {
+  const meta = await sharp(sourceBuffer).metadata();
+  const width = Number(meta.width || 0);
+  const height = Number(meta.height || 0);
+  if (!width || !height) throw new Error('Invalid source image');
+
+  const ratio = width / height;
+  if (ratio <= 0.9) {
+    // Real portrait artwork: fill the 2:3 poster directly.
+    return sharp(sourceBuffer)
+      .resize(600, 900, { fit: 'cover', position: 'centre' })
+      .webp({ quality: 88 })
+      .toBuffer();
+  }
+
+  // Landscape artwork: make a real 600x900 poster server-side.
+  // The background is a darkened/blurred crop; the original art is centered uncut.
+  const background = await sharp(sourceBuffer)
+    .resize(600, 900, { fit: 'cover', position: 'centre' })
+    .blur(26)
+    .modulate({ brightness: 0.48, saturation: 0.92 })
+    .webp({ quality: 80 })
+    .toBuffer();
+
+  const foreground = await sharp(sourceBuffer)
+    .resize(552, 620, {
+      fit: 'inside',
+      withoutEnlargement: false
+    })
+    .webp({ quality: 92 })
+    .toBuffer();
+
+  return sharp(background)
+    .composite([{ input: foreground, gravity: 'center' }])
+    .webp({ quality: 88 })
+    .toBuffer();
+}
+
+async function getOrCreateCover(steamType, steamId, refresh = false) {
+  let appId = steamType === 'app' ? String(steamId) : null;
+  if (!appId && steamType === 'package') appId = await resolvePackageAppId(steamId);
+
+  // Historical matcher records can still have the wrong type. If a package cannot
+  // be resolved, safely try the numeric ID as an AppID (same fallback as steam-price).
+  if (!appId && /^\d+$/.test(String(steamId))) appId = String(steamId);
+  if (!appId) throw new Error('Could not resolve AppID for artwork');
+
+  const cachePath = path.join(COVER_DIR, `app-${appId}.webp`);
+  if (!refresh && fs.existsSync(cachePath)) return { cachePath, appId };
+
+  const found = await getAppArtwork(appId);
+  if (!found) throw new Error(`Steam artwork unavailable for AppID ${appId}`);
+
+  const normalized = await normalizeCover(found.buffer);
+  fs.writeFileSync(cachePath, normalized);
+  return { cachePath, appId, source: found.source };
+}
+
+function sendCover(res, buffer) {
+  res.writeHead(200, {
+    'Access-Control-Allow-Origin': '*',
+    'Content-Type': 'image/webp',
+    'Content-Length': buffer.length,
+    'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800'
+  });
+  res.end(buffer);
+}
+
 async function getCbrRate(currency) {
   if (currency === 'RUB') return { rate: 1, date: null };
 
@@ -152,6 +306,26 @@ const server = http.createServer(async (req, res) => {
       version: 1,
       matches: readMatches()
     });
+  }
+
+
+
+  if (url.pathname === '/api/cover') {
+    const steamType = String(url.searchParams.get('steamType') || '').toLowerCase();
+    const steamId = String(url.searchParams.get('steamId') || '');
+    const refresh = url.searchParams.get('refresh') === '1';
+
+    if (!['app', 'package'].includes(steamType) || !/^\d+$/.test(steamId)) {
+      return json(res, 400, { ok: false, error: 'steamType=app|package and numeric steamId are required' });
+    }
+
+    try {
+      const result = await getOrCreateCover(steamType, steamId, refresh);
+      return sendCover(res, fs.readFileSync(result.cachePath));
+    } catch (err) {
+      console.error('cover error:', steamType, steamId, err.message);
+      return json(res, 404, { ok: false, error: err.message });
+    }
   }
 
   if (url.pathname !== '/api/steam-price') {
