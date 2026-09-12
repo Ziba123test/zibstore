@@ -39,12 +39,13 @@ async function fetchJson(url) {
 
 async function getAppPrice(appid, cc) {
   const data = await fetchJson(
-    `https://store.steampowered.com/api/appdetails?appids=${appid}&cc=${cc}&filters=price_overview`
+    `https://store.steampowered.com/api/appdetails?appids=${appid}&cc=${cc}&filters=basic,price_overview`
   );
   const entry = data?.[appid];
   if (!entry?.success || !entry.data?.price_overview) return null;
 
-  const p = entry.data.price_overview;
+  const d = entry.data;
+  const p = d.price_overview;
   return {
     steamType: 'app',
     steamId: Number(appid),
@@ -53,7 +54,10 @@ async function getAppPrice(appid, cc) {
     final: p.final / 100,
     initial: p.initial / 100,
     discount_percent: p.discount_percent || 0,
-    steam_url: `https://store.steampowered.com/app/${appid}/`
+    steam_url: `https://store.steampowered.com/app/${appid}/`,
+    header_image: d.header_image || null,
+    capsule_image: d.capsule_image || null,
+    capsule_imagev5: d.capsule_imagev5 || null
   };
 }
 
