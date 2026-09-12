@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <!-- ZibStore frontend v42: automatic cover-quality detection -->
+  <!-- ZibStore frontend v43: public cover warnings hidden; admin manages covers -->
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>ЗибСтор — Ключи игр | Честное сравнение цен</title>
@@ -380,17 +380,7 @@
     const mode = String(target?.coverMode || 'steam').toLowerCase();
     const customUrl = target?.coverUrl ? String(target.coverUrl) : '';
 
-    art.querySelectorAll('[data-cover-quality-badge]').forEach(node => node.remove());
-
-    const showNeedsCover = () => {
-      if (art.querySelector('[data-cover-quality-badge]')) return;
-      const badge = document.createElement('span');
-      badge.dataset.coverQualityBadge = '1';
-      badge.className = 'absolute bottom-2 left-2 z-20 rounded-md border border-amber-400/40 bg-black/85 px-2 py-1 text-[9px] font-black tracking-[0.08em] text-amber-300 shadow-lg backdrop-blur-sm';
-      badge.textContent = 'НУЖНА ОБЛОЖКА';
-      badge.title = 'Steam не отдал нативную вертикальную обложку 600×900. Можно задать coverAppId или coverUrl.';
-      art.appendChild(badge);
-    };
+    const showNeedsCover = () => {};
 
     let coverSrc = '';
 
