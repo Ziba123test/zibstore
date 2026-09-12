@@ -399,16 +399,25 @@
     img.className = 'h-full w-full opacity-0 transition-opacity duration-300';
 
     img.addEventListener('load', () => {
-      // Вертикальные обложки заполняют карточку, горизонтальные полностью
-      // вписываются внутрь — так логотипы и названия игр не обрезаются.
+      // Вертикальные постеры заполняют карточку полностью.
+      // Для горизонтальных изображений делаем "кинопостерный" режим:
+      // само изображение показываем целиком, а пустое пространство
+      // заполняем тем же изображением как размытым фоном.
       const ratio = img.naturalWidth && img.naturalHeight
         ? img.naturalWidth / img.naturalHeight
         : 1;
+
       if (ratio > 1.05) {
-        img.classList.add('object-contain', 'bg-nox-bg');
+        art.style.backgroundImage = `linear-gradient(rgba(20,17,17,.38), rgba(20,17,17,.38)), url("${img.src}")`;
+        art.style.backgroundSize = 'cover';
+        art.style.backgroundPosition = 'center';
+        art.style.backgroundRepeat = 'no-repeat';
+        img.classList.add('object-contain', 'relative', 'z-10');
+        img.style.padding = '8px';
       } else {
         img.classList.add('object-cover');
       }
+
       img.classList.remove('opacity-0');
       if (fallback) fallback.classList.add('hidden');
     });
