@@ -306,7 +306,10 @@
         type: saved.type === 'package' ? 'package' : 'app',
         id: String(saved.steamId),
         label: saved.title || product.name,
-        region: saved.region || 'ru'
+        // Основной регион сравнения — Россия.
+        // Старые сохранённые записи matcher с region: 'kz' игнорируем:
+        // backend сам использует RU → KZ → UA → US как fallback.
+        region: 'ru'
       };
     }
 
@@ -316,9 +319,8 @@
     return STEAM_PRICE_MAP.byName.find(rule => rule.test(name))?.target || null;
   }
 
-  // GitHub Pages — статический хостинг, поэтому Steam API вызывается
-  // через собственный API ЗибСтора на VPS.
-  // Основной регион: RU; backend делает fallback на KZ -> UA -> US.
+  // Новый собственный backend на Selectel VPS.
+  // Основной регион — RU. Backend сам делает fallback: RU → KZ → UA → US.
   const STEAM_API_BASE = 'https://api.zibstore.ru/api/steam-price';
 
   async function fetchSteamPrice(target) {
@@ -326,9 +328,8 @@
       const params = new URLSearchParams();
       if (target.type === 'package') params.set('packageid', target.id);
       else params.set('appid', target.id);
-      // RU — основной регион сравнения для российского магазина. Backend
-      // при необходимости сделает fallback на KZ -> UA -> US и вернёт фактический регион.
-      params.set('cc', target.region || 'ru');
+      // Явно просим RU. Backend при отсутствии цены попробует fallback-регионы.
+      params.set('cc', 'ru');
       const res = await fetch(`${STEAM_API_BASE}?${params.toString()}`);
       if (!res.ok) throw new Error(`Steam proxy HTTP ${res.status}`);
       return await res.json();
@@ -363,7 +364,8 @@
 
       const steam = await fetchSteamPrice(target);
       if (!steam || !steam.available || typeof steam.final_rub !== 'number') {
-        // Если цены Steam нет, не показываем техническую ошибку покупателю.
+        // Для публичной витрины не показываем технические ошибки/отсутствие цены.
+        // Просто убираем блок сравнения.
         el.remove();
         continue;
       }
