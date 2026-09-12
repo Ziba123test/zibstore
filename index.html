@@ -217,7 +217,7 @@
           type: 'package',
           id: '1221725',
           label: 'DOOM: The Dark Ages Premium Edition',
-          region: 'kz'
+          region: 'ru'
         }
       },
       {
@@ -226,7 +226,7 @@
           type: 'app',
           id: '3751950',
           label: "Assassin's Creed Black Flag Resynced",
-          region: 'kz'
+          region: 'ru'
         }
       }
       ,
@@ -236,7 +236,7 @@
           type: 'app',
           id: '1623730',
           label: 'Palworld',
-          region: 'kz'
+          region: 'ru'
         }
       },
       {
@@ -245,7 +245,7 @@
           type: 'app',
           id: '242550',
           label: 'Rayman Legends',
-          region: 'kz'
+          region: 'ru'
         }
       },
       {
@@ -254,7 +254,7 @@
           type: 'app',
           id: '3751260',
           label: 'The Blood of Dawnwalker',
-          region: 'kz'
+          region: 'ru'
         }
       },
       {
@@ -263,7 +263,7 @@
           type: 'app',
           id: '3241660',
           label: 'R.E.P.O.',
-          region: 'kz'
+          region: 'ru'
         }
       },
       {
@@ -272,7 +272,7 @@
           type: 'app',
           id: '2868840',
           label: 'Slay the Spire 2',
-          region: 'kz'
+          region: 'ru'
         }
       }
     ]
@@ -306,7 +306,7 @@
         type: saved.type === 'package' ? 'package' : 'app',
         id: String(saved.steamId),
         label: saved.title || product.name,
-        region: saved.region || 'kz'
+        region: saved.region || 'ru'
       };
     }
 
@@ -317,19 +317,18 @@
   }
 
   // GitHub Pages — статический хостинг, поэтому Steam API вызывается
-  // через уже работающую Netlify Function на отдельном домене.
-  // Если домен Netlify изменится, меняем только эту строку.
-  // Текущий backend: tubular-raindrop-b709b3.netlify.app
-  const STEAM_API_BASE = 'https://tubular-raindrop-b709b3.netlify.app/.netlify/functions/steam-price';
+  // через собственный API ЗибСтора на VPS.
+  // Основной регион: RU; backend делает fallback на KZ -> UA -> US.
+  const STEAM_API_BASE = 'https://api.zibstore.ru/api/steam-price';
 
   async function fetchSteamPrice(target) {
     try {
       const params = new URLSearchParams();
       if (target.type === 'package') params.set('packageid', target.id);
       else params.set('appid', target.id);
-      // KZ — основной регион сравнения для нашего магазина. Сама функция при необходимости
-      // сделает fallback на UA -> US и вернёт фактический регион в steam.cc.
-      params.set('cc', target.region || 'kz');
+      // RU — основной регион сравнения для российского магазина. Backend
+      // при необходимости сделает fallback на KZ -> UA -> US и вернёт фактический регион.
+      params.set('cc', target.region || 'ru');
       const res = await fetch(`${STEAM_API_BASE}?${params.toString()}`);
       if (!res.ok) throw new Error(`Steam proxy HTTP ${res.status}`);
       return await res.json();
@@ -364,10 +363,8 @@
 
       const steam = await fetchSteamPrice(target);
       if (!steam || !steam.available || typeof steam.final_rub !== 'number') {
-        const reason = steam?.reason === 'no_price_in_tried_regions'
-          ? 'Цена Steam недоступна в проверенных регионах'
-          : 'Steam: цена недоступна';
-        el.innerHTML = `<span class="text-nox-muted">${escapeHtml(reason)}</span>`;
+        // Если цены Steam нет, не показываем техническую ошибку покупателю.
+        el.remove();
         continue;
       }
 
