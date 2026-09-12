@@ -374,11 +374,17 @@
     if (!art) return;
 
     const appId = encodeURIComponent(String(steam.steamId));
+    // First prefer the exact artwork URLs returned by Steam appdetails.
+    // These include the content hash and therefore work for games whose
+    // predictable CDN paths return 404.
     const sources = [
+      steam.header_image,
+      steam.capsule_image,
+      steam.capsule_imagev5,
       `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`,
       `https://cdn.akamai.steamstatic.com/steam/apps/${appId}/header.jpg`,
       `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/capsule_616x353.jpg`
-    ];
+    ].filter(Boolean);
     const fallback = art.querySelector('[data-art-fallback]');
 
     const img = document.createElement('img');
