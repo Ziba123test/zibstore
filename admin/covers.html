@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta name="robots" content="noindex,nofollow,noarchive" />
-  <title>ZibStore — Админка обложек</title>
+  <title>ZibStore — Подбор обложек</title>
   <style>
     :root{color-scheme:dark}
     *{box-sizing:border-box}
@@ -40,6 +40,21 @@
     .login-box input{width:100%;min-width:0}
     .login-box button{width:100%;margin-top:16px}
     .topline{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+    .picker-backdrop{position:fixed;inset:0;background:#000b;z-index:1000;display:grid;place-items:center;padding:20px}
+    .picker{width:min(1180px,100%);max-height:90vh;overflow:auto;background:#14110f;border:1px solid #44372f;border-radius:18px;padding:18px;box-shadow:0 30px 100px #000}
+    .picker-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:14px}
+    .picker-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}
+    .option{background:#0f0d0c;border:1px solid #2c2521;border-radius:14px;overflow:hidden}
+    .option.good{border-color:#3d7656}
+    .option.ideal{border-color:#6eb98b}
+    .option-img{aspect-ratio:2/3;background:#181411;display:grid;place-items:center;overflow:hidden}
+    .option-img img{width:100%;height:100%;object-fit:contain;background:#090807}
+    .option-body{padding:10px}
+    .option-name{font-weight:800;font-size:12px;word-break:break-word}
+    .option-meta{font-size:12px;color:#aaa;margin:5px 0}
+    .option-status{font-size:12px;margin-bottom:8px}
+    .idealText{color:#6ee7a8}.goodText{color:#f7c96b}.badText{color:#ff9a85}
+    .option button{width:100%}
   </style>
 </head>
 <body>
@@ -85,6 +100,20 @@
 
     <div id="grid" class="grid"></div>
   </main>
+
+<div id="pickerBackdrop" class="picker-backdrop hidden">
+  <div class="picker">
+    <div class="picker-head">
+      <div>
+        <h2 style="margin:0 0 4px">Подбор обложки Steam</h2>
+        <div id="pickerInfo" class="muted"></div>
+      </div>
+      <button id="pickerClose">Закрыть</button>
+    </div>
+    <div id="pickerStatus" class="status"></div>
+    <div id="pickerGrid" class="picker-grid"></div>
+  </div>
+</div>
 
 <script>
 const API = 'https://api.zibstore.ru';
@@ -157,6 +186,103 @@ function visible(item){
   return true;
 }
 
+
+let pickerContext = null;
+
+function closePicker(){
+  pickerContext = null;
+  document.querySelector('#pickerBackdrop').classList.add('hidden');
+  document.querySelector('#pickerGrid').innerHTML = '';
+  document.querySelector('#pickerStatus').textContent = '';
+}
+
+function optionStatus(option){
+  if(option.ideal) return { text:'✓ Идеально для карточки', cls:'idealText' };
+  if(option.suitable) return { text:'✓ Подходит', cls:'goodText' };
+  if(option.width < option.height) return { text:'△ Вертикальная, но пропорции отличаются', cls:'goodText' };
+  return { text:'✕ Горизонтальная', cls:'badText' };
+}
+
+async function openPicker(div,item){
+  pickerContext = { div, item };
+  const backdrop = document.querySelector('#pickerBackdrop');
+  const grid = document.querySelector('#pickerGrid');
+  const status = document.querySelector('#pickerStatus');
+  const current = readCard(div,item);
+
+  backdrop.classList.remove('hidden');
+  grid.innerHTML = '';
+  status.textContent = 'Ищу доступные изображения Steam и проверяю их размеры…';
+  status.className = 'status';
+  document.querySelector('#pickerInfo').textContent =
+    `${item.title || item.productId} · ${item.type} ${item.steamId}`;
+
+  try{
+    const qs = new URLSearchParams({
+      steamType:item.type || 'app',
+      steamId:String(item.steamId || '')
+    });
+
+    // If a coverAppId is already entered, inspect that AppID instead.
+    if(current.coverAppId) qs.set('appId',current.coverAppId);
+
+    const r = await apiFetch('/api/admin/cover-options?' + qs.toString());
+    const data = await r.json();
+    if(!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
+
+    const options = data.options || [];
+    status.textContent = options.length
+      ? `AppID ${data.appId}: найдено вариантов — ${options.length}. Лучшие идут первыми.`
+      : `AppID ${data.appId}: подходящих изображений Steam не найдено.`;
+
+    for(const option of options){
+      const st = optionStatus(option);
+      const el = document.createElement('div');
+      el.className = `option ${option.ideal ? 'ideal' : option.suitable ? 'good' : ''}`;
+      el.innerHTML = `
+        <div class="option-img"><img loading="lazy" alt="" src="${escapeHtml(option.url)}"></div>
+        <div class="option-body">
+          <div class="option-name">${escapeHtml(option.label)}</div>
+          <div class="option-meta">${option.width} × ${option.height} · ratio ${option.ratio}</div>
+          <div class="option-status ${st.cls}">${st.text}</div>
+          <button class="${option.ideal || option.suitable ? 'primary' : ''}">Выбрать</button>
+        </div>
+      `;
+
+      el.querySelector('button').onclick = () => {
+        const mode = div.querySelector('[data-k="coverMode"]');
+        const appIdInput = div.querySelector('[data-k="coverAppId"]');
+        const urlInput = div.querySelector('[data-k="coverUrl"]');
+
+        // Exact Steam image URL becomes the selected cover.
+        mode.value = 'custom';
+        urlInput.value = option.url;
+
+        // Keep coverAppId only as a search hint; custom URL controls the displayed cover.
+        const url = coverEndpoint(readCard(div,item));
+        div.querySelector('img').src = url + (url.includes('?') ? '&' : '?') + '_=' + Date.now();
+
+        const cardStatus = div.querySelector('.status');
+        cardStatus.textContent = `Выбрано ${option.width}×${option.height}. Нажми «Сохранить».`;
+        cardStatus.className = 'status ok';
+        closePicker();
+      };
+
+      grid.appendChild(el);
+    }
+  }catch(e){
+    if(e.message !== 'Unauthorized'){
+      status.textContent = e.message;
+      status.className = 'status err';
+    }
+  }
+}
+
+document.querySelector('#pickerClose').onclick = closePicker;
+document.querySelector('#pickerBackdrop').addEventListener('click',e=>{
+  if(e.target.id === 'pickerBackdrop') closePicker();
+});
+
 function card(item){
   const div = document.createElement('div');
   div.className = 'card';
@@ -190,11 +316,14 @@ function card(item){
 
       <div class="actions">
         <button class="primary" data-action="save">Сохранить</button>
+        <button data-action="picker">Подобрать</button>
         <button data-action="preview">Превью</button>
       </div>
       <div class="status"></div>
     </div>
   `;
+
+  div.querySelector('[data-action="picker"]').onclick = () => openPicker(div,item);
 
   div.querySelector('[data-action="preview"]').onclick = () => {
     const current = readCard(div,item);

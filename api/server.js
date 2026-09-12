@@ -184,6 +184,103 @@ async function resolvePackageAppId(packageId) {
   }
 }
 
+
+async function getArtworkOptions(appId) {
+  appId = String(appId || '').trim();
+  if (!/^\d+$/.test(appId)) throw new Error('Invalid AppID');
+
+  let exact = {};
+  for (const cc of ['us', 'kz', 'ru']) {
+    try {
+      const data = await fetchJson(
+        `https://store.steampowered.com/api/appdetails?appids=${appId}&cc=${cc}&l=english`
+      );
+      const block = data?.[appId];
+      if (block?.success && block?.data) {
+        exact = block.data;
+        break;
+      }
+    } catch (_) {}
+  }
+
+  const candidates = [
+    { label: 'library_600x900', url: `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg` },
+    { label: 'library_600x900 (akamai)', url: `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg` },
+    { label: 'capsule_616x353', url: `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/capsule_616x353.jpg` },
+    { label: 'header', url: exact.header_image || `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/header.jpg` },
+    { label: 'capsule', url: exact.capsule_image },
+    { label: 'capsule_v5', url: exact.capsule_imagev5 },
+    { label: 'library_hero', url: `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_hero.jpg` },
+    { label: 'background_raw', url: exact.background_raw },
+    { label: 'background', url: exact.background }
+  ];
+
+  // Add official, app-specific images found on the Steam store page.
+  for (const cc of ['us', 'kz', 'ru']) {
+    try {
+      const html = await fetchText(
+        `https://store.steampowered.com/app/${appId}/?l=english&cc=${cc}`
+      );
+      for (const url of extractSteamPageImages(html)) {
+        const s = String(url || '');
+        const belongsToApp =
+          s.includes(`/steam/apps/${appId}/`) ||
+          s.includes(`/store_item_assets/steam/apps/${appId}/`);
+        const generic = /\/public\/images\//i.test(s) ||
+          /steam_logo|logo_steam|steamlogo|default|placeholder/i.test(s);
+        const screenshotLike = /screenshots|ss_[a-f0-9]+/i.test(s);
+
+        if (belongsToApp && !generic && !screenshotLike) {
+          candidates.push({ label: 'store_page', url: s });
+        }
+      }
+      if (candidates.length > 14) break;
+    } catch (_) {}
+  }
+
+  const unique = [];
+  const seen = new Set();
+
+  for (const candidate of candidates) {
+    const url = String(candidate.url || '').trim();
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+
+    try {
+      const buffer = await fetchBuffer(url, 9000);
+      const meta = await sharp(buffer).metadata();
+      const width = Number(meta.width || 0);
+      const height = Number(meta.height || 0);
+      if (!width || !height) continue;
+
+      const ratio = width / height;
+      const targetRatio = 2 / 3;
+      const ratioError = Math.abs(ratio - targetRatio);
+      const portrait = ratio < 0.9;
+      const ideal = portrait && ratioError <= 0.08 && width >= 400 && height >= 600;
+      const suitable = portrait && ratioError <= 0.18 && width >= 300 && height >= 450;
+
+      unique.push({
+        label: candidate.label,
+        url,
+        width,
+        height,
+        ratio: Math.round(ratio * 1000) / 1000,
+        ideal,
+        suitable,
+        score:
+          (ideal ? 1000 : suitable ? 600 : portrait ? 300 : 0) +
+          Math.min(width, 2000) / 20 -
+          ratioError * 100
+      });
+    } catch (_) {}
+  }
+
+  unique.sort((a, b) => b.score - a.score);
+
+  return unique.map(({ score, ...item }) => item);
+}
+
 async function getAppArtwork(appId) {
   // Product covers should use key art, not arbitrary gameplay screenshots.
   // Artwork lookup stays independent from pricing regions.
@@ -623,6 +720,37 @@ const server = http.createServer(async (req, res) => {
     const token = getBearerToken(req);
     if (token) adminSessions.delete(token);
     return adminJson(res, 200, { ok: true });
+  }
+
+  if (url.pathname === '/api/admin/cover-options' && req.method === 'GET') {
+    if (!requireAdmin(req, res)) return;
+
+    const steamType = String(url.searchParams.get('steamType') || 'app').toLowerCase();
+    const steamId = String(url.searchParams.get('steamId') || '').trim();
+    const requestedAppId = String(url.searchParams.get('appId') || '').trim();
+
+    if (!['app', 'package'].includes(steamType) || !/^\d+$/.test(steamId)) {
+      return adminJson(res, 400, { ok: false, error: 'steamType and numeric steamId are required' });
+    }
+
+    try {
+      let appId = /^\d+$/.test(requestedAppId) ? requestedAppId : null;
+      if (!appId) {
+        appId = steamType === 'app' ? steamId : await resolvePackageAppId(steamId);
+      }
+      if (!appId) {
+        return adminJson(res, 404, { ok: false, error: 'Could not resolve AppID for artwork' });
+      }
+
+      const options = await getArtworkOptions(appId);
+      return adminJson(res, 200, {
+        ok: true,
+        appId,
+        options
+      });
+    } catch (err) {
+      return adminJson(res, 500, { ok: false, error: err.message });
+    }
   }
 
   if (url.pathname === '/api/admin/covers' && req.method === 'GET') {
