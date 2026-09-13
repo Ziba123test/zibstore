@@ -1470,38 +1470,89 @@ const server = http.createServer(async (req, res) => {
     try {
       const product = await getDigisellerProductDetails(productId);
       const sellerId = String(product?.seller?.id || '').trim();
+
       if (!/^\d+$/.test(sellerId)) {
         return json(res, 404, { ok: false, error: 'Seller ID is unavailable for this product' });
       }
 
-      const reviewsUrl =
-        `${DIGISELLER_API_BASE}/reviews?seller_id=${encodeURIComponent(sellerId)}` +
-        `&product_id=${encodeURIComponent(productId)}` +
-        `&type=all&page=${page}&rows=${rows}&lang=ru-RU`;
+      // Reviews in Digiseller are separated by marketplace owner_id.
+      // 1 = Plati.market, 0 = seller's own shop, 1271 = GGsel, 9295 = WMCenter.
+      // Product statistics may show review totals even when a request without
+      // owner_id returns no review rows, so query the real marketplaces explicitly.
+      const ownerIds = [1, 0, 1271, 9295];
+      const ownerResults = [];
 
-      const data = await fetchJson(reviewsUrl);
-      if (Number(data?.retval || 0) !== 0) {
-        throw new Error(data?.retdesc || 'Digiseller reviews unavailable');
+      for (const ownerId of ownerIds) {
+        try {
+          const reviewsUrl =
+            `${DIGISELLER_API_BASE}/reviews?seller_id=${encodeURIComponent(sellerId)}` +
+            `&product_id=${encodeURIComponent(productId)}` +
+            `&type=all&owner_id=${ownerId}` +
+            `&page=${page}&rows=${rows}&lang=ru-RU`;
+
+          const data = await fetchJson(reviewsUrl);
+          if (Number(data?.retval || 0) !== 0) continue;
+
+          const reviews = (Array.isArray(data?.reviews) ? data.reviews : []).map(review => ({
+            id: String(review?.id || ''),
+            invoiceId: String(review?.invoice_id || ''),
+            ownerId: Number(review?.owner_id ?? ownerId),
+            type: String(review?.type || ''),
+            good: Number(review?.good || 0),
+            date: String(review?.date || ''),
+            info: sellerText(review?.info || '', 4000),
+            comment: sellerText(review?.comment || '', 4000)
+          }));
+
+          ownerResults.push({
+            ownerId,
+            totalPages: Number(data?.totalPages || 0),
+            totalItems: Number(data?.totalItems || 0),
+            totalGood: Number(data?.totalGood || 0),
+            totalBad: Number(data?.totalBad || 0),
+            reviews
+          });
+        } catch (_) {}
       }
 
-      const reviews = (Array.isArray(data?.reviews) ? data.reviews : []).map(review => ({
-        id: String(review?.id || ''),
-        type: String(review?.type || ''),
-        good: Number(review?.good || 0),
-        date: String(review?.date || ''),
-        info: sellerText(review?.info || '', 4000),
-        comment: sellerText(review?.comment || '', 4000)
-      }));
+      // Prefer actual review rows over aggregate counters.
+      // Aggregate all marketplaces and deduplicate by marketplace + review ID.
+      const seen = new Set();
+      const reviews = [];
+      for (const result of ownerResults) {
+        for (const review of result.reviews) {
+          const key = `${review.ownerId}:${review.id || review.invoiceId}:${review.date}:${review.info}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          reviews.push(review);
+        }
+      }
+
+      // Keep only rows that actually contain review text or seller response.
+      const textReviews = reviews.filter(review =>
+        String(review.info || '').trim() || String(review.comment || '').trim()
+      );
+
+      // The tab should describe the reviews we can really show, not a hidden
+      // aggregate count from product.statistics.
+      const totalGood = textReviews.filter(review =>
+        review.type === 'good' || Number(review.good) === 1
+      ).length;
+      const totalBad = textReviews.filter(review =>
+        review.type === 'bad' || (review.type && review.type !== 'good')
+      ).length;
 
       return json(res, 200, {
         ok: true,
         productId,
         sellerId,
-        totalPages: Number(data?.totalPages || 0),
-        totalItems: Number(data?.totalItems || 0),
-        totalGood: Number(data?.totalGood || 0),
-        totalBad: Number(data?.totalBad || 0),
-        reviews
+        totalPages: Math.max(0, ...ownerResults.map(x => x.totalPages)),
+        totalItems: textReviews.length,
+        totalGood,
+        totalBad,
+        reviews: textReviews.slice(0, rows),
+        marketplacesChecked: ownerIds,
+        marketplacesWithText: [...new Set(textReviews.map(x => x.ownerId))]
       });
     } catch (err) {
       return json(res, 502, { ok: false, error: err.message });
