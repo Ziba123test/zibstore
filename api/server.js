@@ -107,6 +107,11 @@ function extractSteamPageImages(html) {
 
 function cleanSalesTitle(value) {
   let s = String(value || '')
+    // Remove trademark/copyright marks BEFORE NFKC.
+    // NFKC turns ™ into literal "TM", which previously made:
+    //   "STAR WARS Zero Company™" -> "star wars zero companytm"
+    // and prevented an otherwise exact Steam match.
+    .replace(/[™®©℠]/g, ' ')
     .normalize('NFKC')
     .toLowerCase()
     .replace(/[’`´]/g, "'")
@@ -138,6 +143,7 @@ function cleanSalesTitle(value) {
     'кз','тр','ар',
     'chг','chн','снg','снг',
     'world','global','worldwide',
+    'tm','sm',
     'standard','edition'
   ]);
 
