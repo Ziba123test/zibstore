@@ -18,6 +18,8 @@ const AUTO_MATCH_MAX_STEAM_SEARCHES = 40;
 let autoMatchLastSyncAt = 0;
 let autoMatchSyncPromise = null;
 let autoMatchLastReport = null;
+const steamLocalizationCache = new Map();
+const STEAM_LOCALIZATION_CACHE_MS = 24 * 60 * 60 * 1000;
 const COVER_DIR = '/var/www/zibstore/api/covers';
 const CUSTOM_COVER_DIR = '/var/www/zibstore/api/custom-covers';
 const PUBLIC_API_BASE = String(process.env.PUBLIC_API_BASE || 'https://api.zibstore.ru').replace(/\/$/, '');
@@ -870,6 +872,133 @@ async function getPlatiPublicReviews({
   } finally {
     clearTimeout(timer);
   }
+}
+
+
+function stripSteamHtml(value) {
+  return decodeHtmlAttr(
+    String(value || '')
+      .replace(/<br\s*\/?>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+  );
+}
+
+function steamLanguageCellChecked(cellHtml) {
+  const cell = String(cellHtml || '');
+  return (
+    /\bcheckmark\b/i.test(cell) ||
+    /(?:&#10003;|&#x2713;|✓)/i.test(cell) ||
+    /(?:icon_check|ico_check)/i.test(cell)
+  );
+}
+
+function parseSteamRussianLanguageTable(html) {
+  const source = String(html || '');
+  const tables = source.match(/<table\b[\s\S]*?<\/table>/gi) || [];
+
+  for (const table of tables) {
+    if (!/game_language_options|Full Audio|Subtitles|Interface/i.test(table)) continue;
+
+    const rows = table.match(/<tr\b[\s\S]*?<\/tr>/gi) || [];
+    for (const row of rows) {
+      const cells = [...row.matchAll(/<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi)]
+        .map(match => match[1]);
+
+      if (cells.length < 2) continue;
+
+      const languageName = stripSteamHtml(cells[0]);
+      if (!/^Russian$/i.test(languageName) && !/^Русский$/i.test(languageName)) continue;
+
+      return {
+        russian: true,
+        interface: cells.length > 1 ? steamLanguageCellChecked(cells[1]) : null,
+        audio: cells.length > 2 ? steamLanguageCellChecked(cells[2]) : null,
+        subtitles: cells.length > 3 ? steamLanguageCellChecked(cells[3]) : null,
+        detailed: cells.length >= 4,
+        source: 'steam-store-language-table'
+      };
+    }
+
+    // We found the language table but it contained no Russian row.
+    if (/game_language_options|Full Audio|Subtitles|Interface/i.test(table)) {
+      return {
+        russian: false,
+        interface: false,
+        audio: false,
+        subtitles: false,
+        detailed: true,
+        source: 'steam-store-language-table'
+      };
+    }
+  }
+
+  return null;
+}
+
+function parseSteamSupportedLanguages(raw) {
+  const value = String(raw || '');
+  if (!value.trim()) return null;
+
+  const russian = /\bRussian\b/i.test(value);
+  const audio =
+    /\bRussian\s*(?:<[^>]+>\s*)*\*/i.test(value) ||
+    /\bRussian\s*<strong>\s*\*\s*<\/strong>/i.test(value);
+
+  return {
+    russian,
+    interface: russian ? null : false,
+    subtitles: russian ? null : false,
+    audio: russian ? audio : false,
+    detailed: false,
+    source: 'steam-appdetails-supported-languages'
+  };
+}
+
+async function getSteamRussianLocalization(appId) {
+  appId = String(appId || '').trim();
+  if (!/^\d+$/.test(appId)) throw new Error('Invalid Steam AppID');
+
+  const cached = steamLocalizationCache.get(appId);
+  if (cached && Date.now() - cached.savedAt < STEAM_LOCALIZATION_CACHE_MS) {
+    return cached.value;
+  }
+
+  let localization = null;
+
+  // First choice: Steam's language table gives Interface / Full Audio / Subtitles separately.
+  for (const cc of ['us', 'ru', 'kz']) {
+    try {
+      const html = await fetchText(
+        `https://store.steampowered.com/app/${appId}/?l=english&cc=${cc}`
+      );
+      localization = parseSteamRussianLanguageTable(html);
+      if (localization) break;
+    } catch (_) {}
+  }
+
+  // Fallback: appdetails confirms Russian support and marks languages with full audio.
+  if (!localization) {
+    try {
+      const data = await fetchJson(
+        `https://store.steampowered.com/api/appdetails?appids=${appId}&cc=us&l=english&filters=supported_languages`
+      );
+      const entry = data?.[appId];
+      if (entry?.success) {
+        localization = parseSteamSupportedLanguages(entry?.data?.supported_languages);
+      }
+    } catch (_) {}
+  }
+
+  const value = {
+    available: Boolean(localization),
+    appId: Number(appId),
+    localization: localization || null
+  };
+
+  steamLocalizationCache.set(appId, { savedAt: Date.now(), value });
+  return value;
 }
 
 async function getAppPrice(appid, cc) {
@@ -2252,6 +2381,37 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       console.error('cover error:', steamType, steamId, err.message);
       return json(res, 404, { ok: false, error: err.message });
+    }
+  }
+
+  if (url.pathname === '/api/steam-localization' && req.method === 'GET') {
+    const appid = String(url.searchParams.get('appid') || '').trim();
+    const packageid = String(url.searchParams.get('packageid') || '').trim();
+
+    let appId = null;
+
+    if (/^\d+$/.test(appid)) {
+      appId = appid;
+    } else if (/^\d+$/.test(packageid)) {
+      appId = await resolvePackageAppId(packageid);
+    }
+
+    if (!appId) {
+      return json(res, 400, {
+        available: false,
+        error: 'Нужен appid или packageid, который можно сопоставить с AppID'
+      });
+    }
+
+    try {
+      const result = await getSteamRussianLocalization(appId);
+      return json(res, 200, result);
+    } catch (err) {
+      return json(res, 200, {
+        available: false,
+        appId: Number(appId),
+        error: err.message
+      });
     }
   }
 
