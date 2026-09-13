@@ -1458,6 +1458,56 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { ok: true, service: 'zibstore-api' });
   }
 
+  if (url.pathname === '/api/product-reviews' && req.method === 'GET') {
+    const productId = String(url.searchParams.get('productId') || '').trim();
+    const page = Math.max(1, Number(url.searchParams.get('page') || 1));
+    const rows = Math.min(30, Math.max(1, Number(url.searchParams.get('rows') || 12)));
+
+    if (!/^\d+$/.test(productId)) {
+      return json(res, 400, { ok: false, error: 'Valid productId is required' });
+    }
+
+    try {
+      const product = await getDigisellerProductDetails(productId);
+      const sellerId = String(product?.seller?.id || '').trim();
+      if (!/^\d+$/.test(sellerId)) {
+        return json(res, 404, { ok: false, error: 'Seller ID is unavailable for this product' });
+      }
+
+      const reviewsUrl =
+        `${DIGISELLER_API_BASE}/reviews?seller_id=${encodeURIComponent(sellerId)}` +
+        `&product_id=${encodeURIComponent(productId)}` +
+        `&type=all&page=${page}&rows=${rows}&lang=ru-RU`;
+
+      const data = await fetchJson(reviewsUrl);
+      if (Number(data?.retval || 0) !== 0) {
+        throw new Error(data?.retdesc || 'Digiseller reviews unavailable');
+      }
+
+      const reviews = (Array.isArray(data?.reviews) ? data.reviews : []).map(review => ({
+        id: String(review?.id || ''),
+        type: String(review?.type || ''),
+        good: Number(review?.good || 0),
+        date: String(review?.date || ''),
+        info: sellerText(review?.info || '', 4000),
+        comment: sellerText(review?.comment || '', 4000)
+      }));
+
+      return json(res, 200, {
+        ok: true,
+        productId,
+        sellerId,
+        totalPages: Number(data?.totalPages || 0),
+        totalItems: Number(data?.totalItems || 0),
+        totalGood: Number(data?.totalGood || 0),
+        totalBad: Number(data?.totalBad || 0),
+        reviews
+      });
+    } catch (err) {
+      return json(res, 502, { ok: false, error: err.message });
+    }
+  }
+
   if (url.pathname === '/api/product-details' && req.method === 'GET') {
     const productId = String(url.searchParams.get('productId') || '').trim();
     if (!/^\d+$/.test(productId)) {
