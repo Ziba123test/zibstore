@@ -305,7 +305,10 @@ async function saveCustomCoverBuffer(productId, inputBuffer, source = 'upload') 
   const height = Number(meta.height || 0);
   if (!width || !height) throw new Error('Не удалось определить размер изображения');
 
-  // Preserve the source proportions. We only convert/limit size; no synthetic poster/cropping.
+  // Versioned names avoid browser/CDN showing an older saved cover.
+  const filename = `product-${productId}-${Date.now()}.webp`;
+  const filePath = path.join(CUSTOM_COVER_DIR, filename);
+
   let pipeline = sharp(inputBuffer).rotate();
   const maxW = 1800;
   const maxH = 2700;
@@ -313,8 +316,6 @@ async function saveCustomCoverBuffer(productId, inputBuffer, source = 'upload') 
     pipeline = pipeline.resize(maxW, maxH, { fit: 'inside', withoutEnlargement: true });
   }
 
-  const filename = `product-${productId}.webp`;
-  const filePath = path.join(CUSTOM_COVER_DIR, filename);
   await pipeline.webp({ quality: 92 }).toFile(filePath);
 
   const savedMeta = await sharp(filePath).metadata();
@@ -332,6 +333,59 @@ async function saveCustomCoverBuffer(productId, inputBuffer, source = 'upload') 
     ...quality
   };
 }
+
+function localCustomFilenameFromUrl(rawUrl) {
+  const url = String(rawUrl || '').trim();
+  const prefix = `${PUBLIC_API_BASE}/api/custom-cover/`;
+  if (!url.startsWith(prefix)) return null;
+  const filename = decodeURIComponent(url.slice(prefix.length));
+  return /^[A-Za-z0-9._-]+\.webp$/.test(filename) ? filename : null;
+}
+
+function customCoverUrl(filename) {
+  return `${PUBLIC_API_BASE}/api/custom-cover/${encodeURIComponent(filename)}`;
+}
+
+async function listSavedCustomCovers() {
+  const files = fs.existsSync(CUSTOM_COVER_DIR)
+    ? fs.readdirSync(CUSTOM_COVER_DIR).filter(name => /^[A-Za-z0-9._-]+\.webp$/.test(name))
+    : [];
+
+  const items = [];
+  for (const filename of files) {
+    const filePath = path.join(CUSTOM_COVER_DIR, filename);
+    try {
+      const stat = fs.statSync(filePath);
+      const meta = await sharp(filePath).metadata();
+      const width = Number(meta.width || 0);
+      const height = Number(meta.height || 0);
+      items.push({
+        filename,
+        url: customCoverUrl(filename),
+        width,
+        height,
+        size: stat.size,
+        modifiedAt: stat.mtime.toISOString(),
+        ...classifyDimensions(width, height)
+      });
+    } catch (_) {}
+  }
+
+  items.sort((a,b) => String(b.modifiedAt).localeCompare(String(a.modifiedAt)));
+  return items;
+}
+
+function deleteSavedCustomCover(filename) {
+  if (!/^[A-Za-z0-9._-]+\.webp$/.test(String(filename || ''))) return false;
+  const filePath = path.join(CUSTOM_COVER_DIR, filename);
+  try {
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 
 async function inspectCustomUrl(rawUrl) {
   const url = String(rawUrl || '').trim();
@@ -883,7 +937,7 @@ function sanitizeCoverPatch(input = {}) {
 
   if ('coverSource' in input) {
     const value = String(input.coverSource || '').trim().toLowerCase();
-    out.coverSource = ['steam', 'url', 'upload'].includes(value) ? value : null;
+    out.coverSource = ['steam', 'url', 'upload', 'saved'].includes(value) ? value : null;
   }
 
   return out;
@@ -980,6 +1034,93 @@ const server = http.createServer(async (req, res) => {
       'Cache-Control': 'public, max-age=86400'
     });
     return res.end(buffer);
+  }
+
+  if (url.pathname === '/api/admin/cover-library' && req.method === 'GET') {
+    if (!requireAdmin(req, res)) return;
+
+    try {
+      const items = await listSavedCustomCovers();
+      return adminJson(res, 200, { ok: true, items });
+    } catch (err) {
+      return adminJson(res, 500, { ok: false, error: err.message });
+    }
+  }
+
+  if (url.pathname === '/api/admin/use-saved-cover' && req.method === 'POST') {
+    if (!requireAdmin(req, res)) return;
+
+    try {
+      const body = await readJsonBody(req, 64 * 1024);
+      const productId = String(body.productId || '').trim();
+      const filename = String(body.filename || '').trim();
+
+      if (!productId || !/^[A-Za-z0-9._-]+\.webp$/.test(filename)) {
+        return adminJson(res, 400, { ok: false, error: 'productId and valid filename are required' });
+      }
+
+      const matches = readSteamMatchesFile();
+      if (!matches[productId]) {
+        return adminJson(res, 404, { ok: false, error: 'Product mapping not found' });
+      }
+
+      const filePath = path.join(CUSTOM_COVER_DIR, filename);
+      if (!fs.existsSync(filePath)) {
+        return adminJson(res, 404, { ok: false, error: 'Saved cover not found' });
+      }
+
+      const meta = await sharp(filePath).metadata();
+      const width = Number(meta.width || 0);
+      const height = Number(meta.height || 0);
+      const quality = classifyDimensions(width, height);
+
+      matches[productId] = {
+        ...matches[productId],
+        coverMode: 'custom',
+        coverUrl: customCoverUrl(filename),
+        coverSource: 'saved'
+      };
+      writeSteamMatchesFile(matches);
+
+      return adminJson(res, 200, {
+        ok: true,
+        productId,
+        item: matches[productId],
+        cover: { filename, width, height, ...quality }
+      });
+    } catch (err) {
+      return adminJson(res, 400, { ok: false, error: err.message });
+    }
+  }
+
+  if (url.pathname === '/api/admin/delete-saved-cover' && req.method === 'POST') {
+    if (!requireAdmin(req, res)) return;
+
+    try {
+      const body = await readJsonBody(req, 64 * 1024);
+      const filename = String(body.filename || '').trim();
+      if (!/^[A-Za-z0-9._-]+\.webp$/.test(filename)) {
+        return adminJson(res, 400, { ok: false, error: 'Invalid filename' });
+      }
+
+      const targetUrl = customCoverUrl(filename);
+      const matches = readSteamMatchesFile();
+      const inUseBy = Object.entries(matches)
+        .filter(([, item]) => item?.coverUrl === targetUrl)
+        .map(([productId]) => productId);
+
+      if (inUseBy.length) {
+        return adminJson(res, 409, {
+          ok: false,
+          error: `Обложка используется товарами: ${inUseBy.join(', ')}`
+        });
+      }
+
+      deleteSavedCustomCover(filename);
+      return adminJson(res, 200, { ok: true, filename });
+    } catch (err) {
+      return adminJson(res, 400, { ok: false, error: err.message });
+    }
   }
 
   if (url.pathname === '/api/admin/import-cover' && req.method === 'POST') {

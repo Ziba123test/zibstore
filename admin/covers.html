@@ -18,7 +18,7 @@
     button{cursor:pointer}
     button.primary{background:#f3a71b;color:#17100a;border-color:#f3a71b;font-weight:800}
     button.danger{border-color:#70433a}
-    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
     .card{background:#14110f;border:1px solid #2c2521;border-radius:16px;overflow:hidden}
     .cover{aspect-ratio:2/3;background:#1a1512;display:flex;align-items:center;justify-content:center;position:relative}
     .cover img{width:100%;height:100%;object-fit:cover}
@@ -29,7 +29,7 @@
     .row{display:grid;grid-template-columns:1fr;gap:8px;margin-top:8px}
     .row label{font-size:12px;color:#bdb4ad}
     .row input,.row select{width:100%;min-width:0}
-    .actions{display:flex;gap:8px;margin-top:12px}
+    .actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:12px}
     .status{font-size:12px;margin-top:8px;min-height:18px}
     .ok{color:#6ee7a8}.err{color:#ff8a8a}
     .hidden{display:none!important}
@@ -54,13 +54,13 @@
     .option-meta{font-size:12px;color:#aaa;margin:5px 0}
     .option-status{font-size:12px;margin-bottom:8px}
     .idealText{color:#6ee7a8}.goodText{color:#f7c96b}.badText{color:#ff9a85}
-    .option button{width:100%}
+    .option button{width:100%}.option-actions{display:grid;grid-template-columns:1fr auto;gap:6px}.option-actions .mini{width:auto;padding:8px 10px}
     .cover-status{position:absolute;right:10px;top:10px;padding:6px 8px;border-radius:8px;font-size:11px;font-weight:800;background:#111d}
     .cover-status.ok{color:#7ae7a5;border:1px solid #315f42}
     .cover-status.format{color:#ffd06a;border:1px solid #66501f}
     .cover-status.replace{color:#ff9a85;border:1px solid #713d35}
     .source-pill{display:inline-flex;margin-top:6px;padding:3px 7px;border:1px solid #3a312c;border-radius:999px;font-size:11px;color:#bdb4ad}
-    .subactions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+    .subactions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.actions button{width:100%;min-width:0;padding-left:8px;padding-right:8px;white-space:normal}.card{min-width:0}.body{min-width:0}
     .subactions input[type=file]{display:none}
     .hint{font-size:11px;color:#8e847d;margin-top:5px}
     .picker-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0 14px}
@@ -130,6 +130,20 @@
       <span class="muted">По умолчанию показываются только вертикальные варианты, подходящие для карточки.</span>
     </div>
     <div id="pickerGrid" class="picker-grid"></div>
+  </div>
+</div>
+
+<div id="libraryBackdrop" class="picker-backdrop hidden">
+  <div class="picker">
+    <div class="picker-head">
+      <div>
+        <h2 style="margin:0 0 4px">Сохранённые обложки</h2>
+        <div id="libraryInfo" class="muted"></div>
+      </div>
+      <button id="libraryClose">Закрыть</button>
+    </div>
+    <div id="libraryStatus" class="status"></div>
+    <div id="libraryGrid" class="picker-grid"></div>
   </div>
 </div>
 
@@ -319,6 +333,123 @@ document.querySelector('#pickerBackdrop').addEventListener('click',e=>{
   if(e.target.id === 'pickerBackdrop') closePicker();
 });
 
+
+let libraryContext = null;
+
+function closeLibrary(){
+  libraryContext = null;
+  document.querySelector('#libraryBackdrop').classList.add('hidden');
+  document.querySelector('#libraryGrid').innerHTML = '';
+  document.querySelector('#libraryStatus').textContent = '';
+}
+
+async function openLibrary(div,item){
+  libraryContext = { div, item };
+  const backdrop = document.querySelector('#libraryBackdrop');
+  const grid = document.querySelector('#libraryGrid');
+  const status = document.querySelector('#libraryStatus');
+
+  backdrop.classList.remove('hidden');
+  grid.innerHTML = '';
+  status.textContent = 'Загружаю сохранённые обложки…';
+  status.className = 'status';
+  document.querySelector('#libraryInfo').textContent = item.title || item.productId;
+
+  try{
+    const r = await apiFetch('/api/admin/cover-library');
+    const data = await r.json();
+    if(!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
+
+    const covers = data.items || [];
+    status.textContent = covers.length
+      ? `Сохранено обложек: ${covers.length}`
+      : 'Сохранённых обложек пока нет.';
+
+    for(const cover of covers){
+      const st = optionStatus(cover);
+      const el = document.createElement('div');
+      el.className = `option ${cover.ideal ? 'ideal' : cover.suitable ? 'good' : ''}`;
+      el.innerHTML = `
+        <div class="option-img"><img loading="lazy" alt="" src="${escapeHtml(cover.url)}"></div>
+        <div class="option-body">
+          <div class="option-name">${escapeHtml(cover.filename)}</div>
+          <div class="option-meta">${cover.width} × ${cover.height}</div>
+          <div class="option-status ${st.cls}">${st.text}</div>
+          <div class="option-actions">
+            <button class="primary" data-action="useSaved">Выбрать</button>
+            <button class="danger mini" data-action="deleteSaved" title="Удалить сохранённый файл">×</button>
+          </div>
+        </div>
+      `;
+
+      el.querySelector('[data-action="useSaved"]').onclick = async () => {
+        try{
+          const rr = await apiFetch('/api/admin/use-saved-cover',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({productId:item.productId,filename:cover.filename})
+          });
+          const saved = await rr.json();
+          if(!rr.ok || !saved.ok) throw new Error(saved.error || `HTTP ${rr.status}`);
+
+          Object.assign(item,saved.item,{
+            coverStatus:saved.cover.status,
+            coverStatusLabel:saved.cover.statusLabel,
+            coverWidth:saved.cover.width,
+            coverHeight:saved.cover.height,
+            coverSource:'saved',
+            coverSourceType:'saved'
+          });
+
+          div.querySelector('[data-k="coverMode"]').value = 'custom';
+          div.querySelector('[data-k="coverUrl"]').value = saved.item.coverUrl;
+          div.querySelector('img').src = saved.item.coverUrl + '?_=' + Date.now();
+
+          const cardStatus = div.querySelector('.status');
+          cardStatus.textContent = `Выбрана сохранённая обложка ${saved.cover.width}×${saved.cover.height}.`;
+          cardStatus.className = 'status ok';
+          closeLibrary();
+          setTimeout(load,250);
+        }catch(e){
+          status.textContent = e.message;
+          status.className = 'status err';
+        }
+      };
+
+      el.querySelector('[data-action="deleteSaved"]').onclick = async () => {
+        if(!confirm(`Удалить ${cover.filename} с сервера?`)) return;
+        try{
+          const rr = await apiFetch('/api/admin/delete-saved-cover',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({filename:cover.filename})
+          });
+          const d = await rr.json();
+          if(!rr.ok || !d.ok) throw new Error(d.error || `HTTP ${rr.status}`);
+          el.remove();
+          status.textContent = 'Сохранённая обложка удалена.';
+          status.className = 'status ok';
+        }catch(e){
+          status.textContent = e.message;
+          status.className = 'status err';
+        }
+      };
+
+      grid.appendChild(el);
+    }
+  }catch(e){
+    if(e.message !== 'Unauthorized'){
+      status.textContent = e.message;
+      status.className = 'status err';
+    }
+  }
+}
+
+document.querySelector('#libraryClose').onclick = closeLibrary;
+document.querySelector('#libraryBackdrop').addEventListener('click',e=>{
+  if(e.target.id === 'libraryBackdrop') closeLibrary();
+});
+
 function card(item){
   const div = document.createElement('div');
   div.className = 'card';
@@ -377,6 +508,7 @@ function card(item){
         <button data-action="picker">Подобрать</button>
         <button data-action="preview">Превью</button>
         <button data-action="reset">Сбросить на Steam</button>
+        <button data-action="saved">Сохранённые</button>
       </div>
       <div class="status"></div>
     </div>
@@ -521,6 +653,8 @@ function card(item){
       }
     }
   };
+
+  div.querySelector('[data-action="saved"]').onclick = () => openLibrary(div,item);
 
   div.querySelector('[data-action="picker"]').onclick = () => openPicker(div,item);
 
