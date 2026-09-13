@@ -256,20 +256,20 @@
               </div>
 
               <div id="product-tab-panel-reviews" class="hidden p-4">
-                <div id="product-reviews-summary" class="mb-3 text-sm text-nox-muted"></div>
+                <div id="product-reviews-summary" class="mb-2 text-sm text-nox-muted"></div>
 
                 <div id="product-reviews-controls" class="mb-2 hidden">
                   <div class="flex flex-wrap items-center gap-2">
                     <button type="button" data-review-filter="all"
-                      class="review-filter rounded-lg border border-nox-accent/50 bg-nox-accent/10 px-3 py-1.5 text-xs font-semibold text-white">
+                      class="review-filter rounded-lg border border-nox-accent/50 bg-nox-accent/10 px-3 py-1.5 text-xs font-semibold text-nox-accent transition">
                       Все <span id="review-filter-all-count"></span>
                     </button>
                     <button type="button" data-review-filter="good"
-                      class="review-filter rounded-lg border border-nox-border bg-black/10 px-3 py-1.5 text-xs font-semibold text-nox-muted transition hover:text-white">
+                      class="review-filter rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3 py-1.5 text-xs font-semibold text-emerald-300 transition hover:border-emerald-400/60 hover:bg-emerald-500/10">
                       ✓ Положительные <span id="review-filter-good-count"></span>
                     </button>
                     <button type="button" data-review-filter="bad"
-                      class="review-filter rounded-lg border border-nox-border bg-black/10 px-3 py-1.5 text-xs font-semibold text-nox-muted transition hover:text-white">
+                      class="review-filter rounded-lg border border-rose-500/30 bg-rose-500/5 px-3 py-1.5 text-xs font-semibold text-rose-300 transition hover:border-rose-400/60 hover:bg-rose-500/10">
                       ! Отрицательные <span id="review-filter-bad-count"></span>
                     </button>
                   </div>
@@ -1187,24 +1187,45 @@
     if (badCount) badCount.textContent = `(${productReviewState.totalBad})`;
 
     document.querySelectorAll('[data-review-filter]').forEach(button => {
-      const active = button.dataset.reviewFilter === productReviewState.filter;
-      button.classList.toggle('border-nox-accent/50', active);
-      button.classList.toggle('bg-nox-accent/10', active);
-      button.classList.toggle('text-white', active);
-      button.classList.toggle('border-nox-border', !active);
-      button.classList.toggle('bg-black/10', !active);
-      button.classList.toggle('text-nox-muted', !active);
+      const type = button.dataset.reviewFilter || 'all';
+      const active = type === productReviewState.filter;
 
-      if (button.dataset.reviewFilter === 'bad') {
-        button.disabled = productReviewState.totalBad <= 0;
-        button.classList.toggle('opacity-40', productReviewState.totalBad <= 0);
-        button.classList.toggle('cursor-not-allowed', productReviewState.totalBad <= 0);
+      // Clear all state classes first.
+      button.classList.remove(
+        'ring-1', 'ring-nox-accent/50', 'ring-emerald-400/50', 'ring-rose-400/50',
+        'border-nox-accent', 'border-emerald-400/70', 'border-rose-400/70',
+        'bg-nox-accent/15', 'bg-emerald-500/15', 'bg-rose-500/15'
+      );
+
+      if (type === 'all') {
+        button.classList.toggle('border-nox-accent', active);
+        button.classList.toggle('bg-nox-accent/15', active);
+        button.classList.toggle('ring-1', active);
+        button.classList.toggle('ring-nox-accent/50', active);
+      } else if (type === 'good') {
+        button.classList.toggle('border-emerald-400/70', active);
+        button.classList.toggle('bg-emerald-500/15', active);
+        button.classList.toggle('ring-1', active);
+        button.classList.toggle('ring-emerald-400/50', active);
+      } else if (type === 'bad') {
+        button.classList.toggle('border-rose-400/70', active);
+        button.classList.toggle('bg-rose-500/15', active);
+        button.classList.toggle('ring-1', active);
+        button.classList.toggle('ring-rose-400/50', active);
       }
 
-      if (button.dataset.reviewFilter === 'good') {
-        button.disabled = productReviewState.totalGood <= 0;
-        button.classList.toggle('opacity-40', productReviewState.totalGood <= 0);
-        button.classList.toggle('cursor-not-allowed', productReviewState.totalGood <= 0);
+      if (type === 'bad') {
+        const disabled = productReviewState.totalBad <= 0;
+        button.disabled = disabled;
+        button.classList.toggle('opacity-35', disabled);
+        button.classList.toggle('cursor-not-allowed', disabled);
+      }
+
+      if (type === 'good') {
+        const disabled = productReviewState.totalGood <= 0;
+        button.disabled = disabled;
+        button.classList.toggle('opacity-35', disabled);
+        button.classList.toggle('cursor-not-allowed', disabled);
       }
     });
   }
@@ -1239,11 +1260,8 @@
     }
 
     if (summary) {
-      summary.innerHTML = total
-        ? `<span class="text-emerald-300">Положительных: ${good}</span>` +
-          `<span class="mx-2 text-nox-muted">·</span>` +
-          `<span class="${bad > 0 ? 'text-rose-300' : 'text-nox-muted'}">Отрицательных: ${bad}</span>`
-        : 'У этого лота пока нет отзывов.';
+      summary.textContent = total > 0 ? '' : 'У этого лота пока нет отзывов.';
+      summary.classList.toggle('hidden', total > 0);
     }
 
     updateReviewFilterControls();
