@@ -110,39 +110,41 @@ function cleanSalesTitle(value) {
     .normalize('NFKC')
     .toLowerCase()
     .replace(/[’`´]/g, "'")
-    .replace(/[\u{1F000}-\u{1FAFF}]/gu, ' ');
+    .replace(/[\u{1F000}-\u{1FAFF}\uFE0F]/gu, ' ');
 
-  const noise = [
-    /\bsteam\b/gi,
-    /\bgift\b/gi,
-    /\bkey\b/gi,
-    /\bauto(?:delivery)?\b/gi,
-    /\bавто(?:доставка)?\b/gi,
-    /\bключ\b/gi,
-    /\bгифт\b/gi,
-    /\bподарок\b/gi,
-    /\bбонус\b/gi,
-    /\bдля\s+россии\b/gi,
-    /\bроссия\b/gi,
-    /\bвесь\s+мир\b/gi,
-    /\bworldwide\b/gi,
-    /\bglobal\b/gi,
-    /\bмир\b/gi,
-    /\bвыбор\s+издания\b/gi,
-    /\bstandard\s+edition\b/gi,
-    /\bstandard\b/gi,
-
-    // Seller titles mix Latin/Cyrillic region abbreviations, e.g.
-    // "RU/BY/UA/СНГ", "РУ + МИР", and even mixed "CHГ".
-    // Strip all of these before comparing game titles.
-    /\b(?:ru|ру|rf|рф|ua|уа|by|бу|kz|кз|tr|тр|ar|ар|cis|снг|chг|chн|снg|world)\b/gi
+  // Remove multi-word seller phrases first. Avoid \b here: JavaScript word
+  // boundaries are ASCII-oriented and fail on Cyrillic words like "РУ"/"СНГ"/"авто".
+  const phrases = [
+    /выбор\s+издания/giu,
+    /весь\s+мир/giu,
+    /для\s+россии/giu,
+    /standard\s+edition/giu,
+    /steam\s+auto/giu
   ];
-  for (const re of noise) s = s.replace(re, ' ');
+  for (const re of phrases) s = s.replace(re, ' ');
+
+  // Convert seller separators to spaces before token filtering.
+  s = s
+    .replace(/[+*|/\\()[\]{}<>—–_-]+/g, ' ')
+    .replace(/[^a-zа-яё0-9:'&.]+/giu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const noiseTokens = new Set([
+    'steam','gift','key','auto','autodelivery',
+    'авто','автодоставка','ключ','гифт','подарок','бонус',
+    'россия','мир','снг','рф','ру','уа',
+    'ru','rf','ua','by','kz','tr','ar','cis',
+    'кз','тр','ар',
+    'chг','chн','снg','снг',
+    'world','global','worldwide',
+    'standard','edition'
+  ]);
 
   return s
-    .replace(/[+*|/\\()[\]{}<>—–_-]+/g, ' ')
-    .replace(/[^a-zа-яё0-9:'&.]+/gi, ' ')
-    .replace(/\s+/g, ' ')
+    .split(/\s+/)
+    .filter(token => token && !noiseTokens.has(token))
+    .join(' ')
     .trim();
 }
 
@@ -207,42 +209,98 @@ function editionsCompatible(currentTitle, knownTitle) {
   return a.tag === b.tag;
 }
 
-function cloneHistoricalMatch(product, matches) {
+
+function shouldIgnoreDigisellerProduct(product) {
+  const raw = String(product?.name || '').normalize('NFKC').toLowerCase();
+
+  // Steam top-up/recharge is a partner service, not a game. Never try to map it to Steam AppID.
+  return (
+    /пополн(?:ение|ить|ения|ить\s+баланс)/iu.test(raw) ||
+    /steam\s*(?:wallet|balance|top\s*up|recharge)/iu.test(raw) ||
+    /(?:wallet|balance)\s*steam/iu.test(raw) ||
+    /пополн.*steam/iu.test(raw)
+  );
+}
+
+function historicalCandidates(product, matches, limit = 5) {
   const candidates = [];
 
   for (const [oldProductId, item] of Object.entries(matches || {})) {
     if (!item?.steamId || !item?.title) continue;
     if (String(oldProductId) === String(product.id)) continue;
-    if (!editionsCompatible(product.name, item.title)) continue;
 
     const score = titleSimilarity(product.name, item.title);
-    if (score < 0.92) continue;
-    candidates.push({ oldProductId, item, score });
+    const sameBase = baseGameTitle(product.name) === baseGameTitle(item.title);
+    const editionOk = editionsCompatible(product.name, item.title);
+
+    candidates.push({
+      oldProductId: String(oldProductId),
+      steamId: String(item.steamId),
+      type: item.type === 'package' ? 'package' : 'app',
+      knownTitle: String(item.title),
+      normalizedKnownTitle: baseGameTitle(item.title),
+      score: Math.round(score * 1000) / 1000,
+      exactNormalized: sameBase,
+      editionCompatible: editionOk
+    });
   }
 
-  candidates.sort((a, b) => b.score - a.score);
-  const best = candidates[0];
-  const second = candidates[1];
-  if (!best) return null;
+  return candidates
+    .sort((a, b) => {
+      if (a.exactNormalized !== b.exactNormalized) return a.exactNormalized ? -1 : 1;
+      if (a.editionCompatible !== b.editionCompatible) return a.editionCompatible ? -1 : 1;
+      return b.score - a.score;
+    })
+    .slice(0, Math.max(1, limit));
+}
 
-  const exactBase = baseGameTitle(product.name) === baseGameTitle(best.item.title);
-  const margin = best.score - (second?.score || 0);
-  if (!exactBase && (best.score < 0.965 || margin < 0.08)) return null;
+function cloneHistoricalMatch(product, matches) {
+  const candidates = historicalCandidates(product, matches, 20)
+    .filter(c => c.editionCompatible);
+
+  if (!candidates.length) return null;
+
+  // Strongest automatic case: after stripping seller noise, titles are identical.
+  const exact = candidates.filter(c => c.exactNormalized);
+  let best = null;
+
+  if (exact.length === 1) {
+    best = exact[0];
+  } else if (exact.length > 1) {
+    // Several Digiseller lots for the same game are okay only if they all point
+    // to the same Steam target. Then inheritance is still unambiguous.
+    const targets = new Set(exact.map(c => `${c.type}:${c.steamId}`));
+    if (targets.size === 1) best = exact[0];
+  }
+
+  // Fuzzy fallback: still conservative and requires a clear lead.
+  if (!best) {
+    const first = candidates[0];
+    const second = candidates[1];
+    if (!first || first.score < 0.965) return null;
+
+    const margin = first.score - (second?.score || 0);
+    if (margin < 0.08) return null;
+    best = first;
+  }
+
+  const source = matches[best.oldProductId];
+  if (!source) return null;
 
   return {
-    type: best.item.type === 'package' ? 'package' : 'app',
-    steamId: String(best.item.steamId),
-    title: String(product.name || best.item.title),
+    type: source.type === 'package' ? 'package' : 'app',
+    steamId: String(source.steamId),
+    title: String(product.name || source.title),
     region: 'ru',
     savedAt: new Date().toISOString(),
-    coverMode: best.item.coverMode || 'steam',
-    ...(best.item.coverAppId ? { coverAppId: String(best.item.coverAppId) } : {}),
-    ...(best.item.coverUrl ? { coverUrl: String(best.item.coverUrl) } : {}),
-    ...(best.item.coverSource ? { coverSource: String(best.item.coverSource) } : {}),
+    coverMode: source.coverMode || 'steam',
+    ...(source.coverAppId ? { coverAppId: String(source.coverAppId) } : {}),
+    ...(source.coverUrl ? { coverUrl: String(source.coverUrl) } : {}),
+    ...(source.coverSource ? { coverSource: String(source.coverSource) } : {}),
     autoMatched: true,
     matchSource: 'history',
     matchedFromProductId: String(best.oldProductId),
-    matchConfidence: Math.round(best.score * 1000) / 1000
+    matchConfidence: best.exactNormalized ? 1 : best.score
   };
 }
 
@@ -359,6 +417,7 @@ async function runAutomaticMatchSync(force = false) {
       alreadyMatched: 0,
       inherited: 0,
       steamSearchMatched: 0,
+      ignored: [],
       unresolved: [],
       errors: []
     };
@@ -373,6 +432,15 @@ async function runAutomaticMatchSync(force = false) {
 
       for (const product of products) {
         const productId = String(product.id);
+
+        if (shouldIgnoreDigisellerProduct(product)) {
+          report.ignored.push({
+            productId,
+            name: product.name,
+            reason: 'non_game_service'
+          });
+          continue;
+        }
 
         if (matches[productId]?.steamId) {
           report.alreadyMatched++;
@@ -404,7 +472,9 @@ async function runAutomaticMatchSync(force = false) {
           productId,
           name: product.name,
           normalizedName: baseGameTitle(product.name),
-          reason: steamSearches >= AUTO_MATCH_MAX_STEAM_SEARCHES ? 'search_limit' : 'low_confidence'
+          edition: editionInfo(product.name),
+          reason: steamSearches >= AUTO_MATCH_MAX_STEAM_SEARCHES ? 'search_limit' : 'low_confidence',
+          candidates: historicalCandidates(product, matches, 5)
         });
       }
 
@@ -418,6 +488,7 @@ async function runAutomaticMatchSync(force = false) {
         alreadyMatched: report.alreadyMatched,
         inherited: report.inherited,
         steamSearchMatched: report.steamSearchMatched,
+        ignored: report.ignored.length,
         unresolved: report.unresolved.length
       }));
 
@@ -1302,6 +1373,7 @@ const server = http.createServer(async (req, res) => {
         lastSyncAt: autoMatchLastSyncAt || null,
         inherited: Number(sync?.inherited || 0),
         steamSearchMatched: Number(sync?.steamSearchMatched || 0),
+        ignored: Array.isArray(sync?.ignored) ? sync.ignored.length : 0,
         unresolved: Array.isArray(sync?.unresolved) ? sync.unresolved.length : 0
       }
     });
@@ -1309,6 +1381,59 @@ const server = http.createServer(async (req, res) => {
 
 
 
+
+  if (url.pathname === '/api/admin/apply-match-candidate' && req.method === 'POST') {
+    if (!requireAdmin(req, res)) return;
+
+    try {
+      const body = await readJsonBody(req, 64 * 1024);
+      const productId = String(body.productId || '').trim();
+      const sourceProductId = String(body.sourceProductId || '').trim();
+
+      if (!productId || !sourceProductId) {
+        return adminJson(res, 400, { ok: false, error: 'productId and sourceProductId are required' });
+      }
+
+      const matches = readSteamMatchesFile();
+      const source = matches[sourceProductId];
+      if (!source?.steamId) {
+        return adminJson(res, 404, { ok: false, error: 'Source Steam mapping not found' });
+      }
+
+      const catalog = await fetchDigisellerCatalog();
+      const product = catalog.find(x => String(x.id) === productId);
+      if (!product) {
+        return adminJson(res, 404, { ok: false, error: 'Current Digiseller product not found' });
+      }
+
+      matches[productId] = {
+        type: source.type === 'package' ? 'package' : 'app',
+        steamId: String(source.steamId),
+        title: String(product.name || source.title || ''),
+        region: 'ru',
+        savedAt: new Date().toISOString(),
+        coverMode: source.coverMode || 'steam',
+        ...(source.coverAppId ? { coverAppId: String(source.coverAppId) } : {}),
+        ...(source.coverUrl ? { coverUrl: String(source.coverUrl) } : {}),
+        ...(source.coverSource ? { coverSource: String(source.coverSource) } : {}),
+        autoMatched: false,
+        matchSource: 'admin-candidate',
+        matchedFromProductId: sourceProductId,
+        matchConfidence: 1
+      };
+
+      writeSteamMatchesFile(matches);
+      autoMatchLastSyncAt = 0;
+
+      return adminJson(res, 200, {
+        ok: true,
+        productId,
+        item: matches[productId]
+      });
+    } catch (err) {
+      return adminJson(res, 400, { ok: false, error: err.message });
+    }
+  }
 
   if (url.pathname === '/api/admin/sync-digiseller' && req.method === 'POST') {
     if (!requireAdmin(req, res)) return;
