@@ -1065,10 +1065,11 @@
     const bad = Number(data?.totalBad || 0);
     const reviews = Array.isArray(data?.reviews) ? data.reviews : [];
     const textItems = Number(data?.textItems ?? reviews.length);
+    const hasAffiliateFallback = Boolean(external?.dataset?.affiliateUrl);
+    const showAffiliateFallback = total > 0 && textItems === 0 && hasAffiliateFallback;
 
-    const shouldShowExternal = total > 0 && textItems === 0 && Boolean(external?.dataset?.affiliateUrl);
-    external?.classList.toggle('hidden', !shouldShowExternal);
-    externalNote?.classList.toggle('hidden', !shouldShowExternal);
+    external?.classList.toggle('hidden', !showAffiliateFallback);
+    externalNote?.classList.toggle('hidden', !showAffiliateFallback);
 
     count.textContent = total > 0 ? `(${total})` : '';
 
@@ -1082,14 +1083,14 @@
       ? `<span class="text-emerald-300">Положительных: ${good}</span>` +
         `<span class="mx-2">·</span>` +
         `<span class="${bad > 0 ? 'text-rose-300' : ''}">Отрицательных: ${bad}</span>` +
-        (textItems < total
-          ? `<span class="ml-2 text-xs text-nox-muted">· доступно текстом: ${textItems}</span>`
+        (textItems > 0 && textItems < total
+          ? `<span class="ml-2 text-xs text-nox-muted">· показано последних: ${textItems}</span>`
           : '')
       : 'У этого лота пока нет отзывов.';
 
     if (!reviews.length) {
       list.innerHTML = total
-        ? '<div class="text-sm text-nox-muted">Количество отзывов подтверждено Digiseller, но тексты сейчас недоступны через подключённый партнёрский интерфейс. Оригинальные отзывы можно проверить на Plati по партнёрской ссылке ниже.</div>'
+        ? '<div class="text-sm text-nox-muted">Количество отзывов подтверждено Digiseller, но тексты сейчас не удалось загрузить с публичной страницы Plati. Оригинальные отзывы можно открыть по партнёрской ссылке ниже.</div>'
         : '<div class="text-sm text-nox-muted">Отзывов пока нет.</div>';
       return;
     }
