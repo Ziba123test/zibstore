@@ -476,6 +476,14 @@
       const el = document.getElementById(`steam-cmp-${product.id}`);
       if (!el) return;
 
+      // Artwork is independent from Steam price availability.
+      // This is important for unreleased/preorder items: they may have artwork
+      // (or a custom uploaded cover) even when Steam has no current price.
+      await setSteamArtwork(product.id, {
+        steamId: String(target.id),
+        steamType: target.type === 'package' ? 'package' : 'app'
+      }, target);
+
       el.innerHTML = `<span class="text-nox-muted">Проверяем цену Steam…</span>`;
       el.removeAttribute('title');
 
@@ -484,8 +492,6 @@
         el.innerHTML = '';
         return;
       }
-
-      await setSteamArtwork(product.id, steam, target);
 
       const ourPrice = Number(product.price_rub ?? product.price ?? product.base_price);
       const steamRub = Number(steam.final_rub);
