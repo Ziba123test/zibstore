@@ -189,6 +189,12 @@
               <img id="product-modal-art-img" alt="" class="hidden h-full w-full object-cover" referrerpolicy="no-referrer">
               <div id="product-modal-badges" class="pointer-events-none absolute inset-0 z-20"></div>
             </div>
+
+            <div id="product-modal-localization"
+              class="mx-auto mt-3 hidden w-full max-w-[340px] rounded-xl border border-nox-border bg-nox-card/60 p-3">
+              <div class="text-[10px] uppercase tracking-wide text-nox-muted">Русская локализация</div>
+              <div id="product-modal-localization-rows" class="mt-2 space-y-1.5"></div>
+            </div>
           </div>
 
           <div class="p-4 sm:p-6 lg:flex lg:h-full lg:min-h-0 lg:flex-col lg:p-6">
@@ -202,12 +208,12 @@
                 <div class="p-4 sm:border-r sm:border-nox-border">
                   <div class="text-[10px] uppercase tracking-wide text-nox-muted">Цена предложения</div>
                   <div id="product-modal-price" class="mt-1 font-display text-2xl font-bold text-nox-accent"></div>
-                  <div class="mt-1 text-xs text-nox-muted">Покупка оформляется на Oplata.info</div>
+                  <div class="mt-1 text-[10px] leading-tight text-nox-muted sm:text-[11px]">Покупка оформляется на Oplata.info</div>
                 </div>
                 <div class="border-t border-nox-border p-4 sm:border-t-0">
                   <div class="text-[10px] uppercase tracking-wide text-nox-muted">Цена в Steam</div>
-                  <div id="product-modal-steam-price" class="mt-1 font-display text-2xl font-bold text-white/80">—</div>
-                  <div id="product-modal-steam-region" class="mt-1 text-xs text-nox-muted">Проверяем актуальную цену</div>
+                  <div id="product-modal-steam-price" class="mt-1 font-display text-2xl font-bold text-white/50">—</div>
+                  <div id="product-modal-steam-region" class="mt-1 text-[10px] leading-tight text-nox-muted sm:text-[11px]">Проверяем актуальную цену</div>
                 </div>
               </div>
               <div id="product-modal-saving" class="hidden border-t border-emerald-500/20 bg-emerald-500/10 px-4 py-3">
@@ -341,6 +347,7 @@
 
   // Product detail data populated by the same Steam comparison calls used in the cards.
   const steamProductCache = new Map();
+  const steamLocalizationCache = new Map();
   const digisellerDetailsCache = new Map();
   const digisellerReviewsCache = new Map();
   let openedProductId = null;
@@ -531,6 +538,7 @@
 
   // Steam API на нашем собственном VPS.
   const STEAM_API_BASE = 'https://api.zibstore.ru/api/steam-price';
+  const STEAM_LOCALIZATION_API = 'https://api.zibstore.ru/api/steam-localization';
 
   async function fetchSteamPrice(target) {
     try {
@@ -546,6 +554,97 @@
       console.warn('Steam price request failed:', target, err);
       return { available: false, error: err?.message || String(err) };
     }
+  }
+
+  async function fetchSteamLocalization(target) {
+    try {
+      const params = new URLSearchParams();
+
+      // coverAppId is normally the exact game app when the price itself uses a package/sub ID.
+      if (target?.coverAppId && /^\d+$/.test(String(target.coverAppId))) {
+        params.set('appid', String(target.coverAppId));
+      } else if (target?.type === 'package') {
+        params.set('packageid', String(target.id));
+      } else {
+        params.set('appid', String(target?.id || ''));
+      }
+
+      const res = await fetch(`${STEAM_LOCALIZATION_API}?${params.toString()}`, {
+        cache: 'default'
+      });
+      if (!res.ok) throw new Error(`Steam localization HTTP ${res.status}`);
+      return await res.json();
+    } catch (err) {
+      console.warn('Steam localization request failed:', target, err);
+      return { available: false, error: err?.message || String(err) };
+    }
+  }
+
+  function localizationStatusRow(label, value) {
+    let icon = '—';
+    let valueText = 'Нет данных';
+    let valueClass = 'text-nox-muted';
+
+    if (value === true) {
+      icon = '✓';
+      valueText = 'Есть';
+      valueClass = 'text-emerald-300';
+    } else if (value === false) {
+      icon = '×';
+      valueText = 'Нет';
+      valueClass = 'text-white/35';
+    }
+
+    return `
+      <div class="flex items-center justify-between gap-3 text-xs">
+        <span class="text-nox-muted">${escapeHtml(label)}</span>
+        <span class="font-semibold ${valueClass}">
+          <span class="mr-1">${icon}</span>${valueText}
+        </span>
+      </div>
+    `;
+  }
+
+  function renderModalLocalization(data, { loading = false, hasTarget = true } = {}) {
+    const box = document.getElementById('product-modal-localization');
+    const rows = document.getElementById('product-modal-localization-rows');
+    if (!box || !rows) return;
+
+    if (!hasTarget) {
+      box.classList.add('hidden');
+      rows.innerHTML = '';
+      return;
+    }
+
+    box.classList.remove('hidden');
+
+    if (loading) {
+      rows.innerHTML = '<div class="text-xs text-nox-muted">Проверяем данные Steam…</div>';
+      return;
+    }
+
+    if (!data?.available) {
+      rows.innerHTML = '<div class="text-xs text-nox-muted">Данные о русской локализации сейчас недоступны.</div>';
+      return;
+    }
+
+    const loc = data.localization || {};
+
+    if (loc.detailed) {
+      rows.innerHTML = [
+        localizationStatusRow('Интерфейс', loc.interface),
+        localizationStatusRow('Субтитры', loc.subtitles),
+        localizationStatusRow('Озвучка', loc.audio)
+      ].join('');
+      return;
+    }
+
+    // Fallback from Steam appdetails: it reliably tells whether Russian exists
+    // at all and marks full-audio languages, but doesn't split interface/subtitles.
+    rows.innerHTML = [
+      localizationStatusRow('Русский язык', loc.russian),
+      localizationStatusRow('Озвучка', loc.audio)
+    ].join('');
   }
 
   function formatSteamOriginalPrice(steam) {
@@ -1624,6 +1723,8 @@
     const target = getSteamTarget(product);
     const price = Number(product.price_rub ?? product.price ?? product.base_price);
 
+    renderModalLocalization(null, { loading: Boolean(target), hasTarget: Boolean(target) });
+
     titleEl.textContent = product.name;
     subtitleEl.textContent = 'Условия, описание и выдача товара определяются продавцом. Перед оплатой ознакомьтесь с информацией ниже.';
     priceEl.textContent = `${formatNum(price)} ${CURRENCY_SYMBOL}`;
@@ -1677,6 +1778,24 @@
 
     modal.classList.remove('hidden');
     document.body.classList.add('modal-open');
+
+    if (target) {
+      const localizationKey = target.coverAppId
+        ? `app:${target.coverAppId}`
+        : `${target.type}:${target.id}`;
+
+      const cachedLocalization = steamLocalizationCache.get(localizationKey);
+      if (cachedLocalization) {
+        renderModalLocalization(cachedLocalization);
+      } else {
+        fetchSteamLocalization(target).then(localization => {
+          steamLocalizationCache.set(localizationKey, localization);
+          if (openedProductId === String(product.id)) {
+            renderModalLocalization(localization);
+          }
+        });
+      }
+    }
 
     if (updateUrl) {
       const url = new URL(window.location.href);
