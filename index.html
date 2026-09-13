@@ -1057,11 +1057,18 @@
     const summary = document.getElementById('product-reviews-summary');
     const list = document.getElementById('product-reviews-list');
     const count = document.getElementById('product-reviews-count');
+    const external = document.getElementById('product-reviews-external');
+    const externalNote = document.getElementById('product-reviews-affiliate-note');
 
     const total = Number(data?.totalItems || 0);
     const good = Number(data?.totalGood || 0);
     const bad = Number(data?.totalBad || 0);
     const reviews = Array.isArray(data?.reviews) ? data.reviews : [];
+    const textItems = Number(data?.textItems ?? reviews.length);
+
+    const shouldShowExternal = total > 0 && textItems === 0 && Boolean(external?.dataset?.affiliateUrl);
+    external?.classList.toggle('hidden', !shouldShowExternal);
+    externalNote?.classList.toggle('hidden', !shouldShowExternal);
 
     count.textContent = total > 0 ? `(${total})` : '';
 
@@ -1070,8 +1077,6 @@
       list.innerHTML = '<div class="text-sm text-nox-muted">Отзывы сейчас недоступны.</div>';
       return;
     }
-
-    const textItems = Number(data?.textItems ?? reviews.length);
 
     summary.innerHTML = total
       ? `<span class="text-emerald-300">Положительных: ${good}</span>` +
@@ -1084,7 +1089,7 @@
 
     if (!reviews.length) {
       list.innerHTML = total
-        ? '<div class="text-sm text-nox-muted">Digiseller подтверждает наличие отзывов, но не передаёт их текст через публичный API. Проверить оригинальные отзывы можно на Plati по партнёрской ссылке ниже.</div>'
+        ? '<div class="text-sm text-nox-muted">Количество отзывов подтверждено Digiseller, но тексты сейчас недоступны через подключённый партнёрский интерфейс. Оригинальные отзывы можно проверить на Plati по партнёрской ссылке ниже.</div>'
         : '<div class="text-sm text-nox-muted">Отзывов пока нет.</div>';
       return;
     }
@@ -1326,8 +1331,9 @@
       const affiliateReviewUrl = buildAffiliatePlatiUrl(details);
       if (affiliateReviewUrl) {
         externalReviewsEl.href = affiliateReviewUrl;
-        externalReviewsEl.classList.remove('hidden');
-        externalReviewsNoteEl.classList.remove('hidden');
+        externalReviewsEl.dataset.affiliateUrl = affiliateReviewUrl;
+      } else {
+        externalReviewsEl.removeAttribute('data-affiliate-url');
       }
 
       infoEl.textContent = info || 'Продавец не добавил отдельное описание для этого лота. Подробные условия доступны на странице Oplata.info перед оплатой.';
