@@ -125,13 +125,17 @@ function cleanSalesTitle(value) {
     /\bдля\s+россии\b/gi,
     /\bроссия\b/gi,
     /\bвесь\s+мир\b/gi,
+    /\bworldwide\b/gi,
+    /\bglobal\b/gi,
     /\bмир\b/gi,
-    /\bснг\b/gi,
-    /\bрф\b/gi,
     /\bвыбор\s+издания\b/gi,
     /\bstandard\s+edition\b/gi,
     /\bstandard\b/gi,
-    /\b(?:ru|ua|by|kz|tr|ar|cis)\b/gi
+
+    // Seller titles mix Latin/Cyrillic region abbreviations, e.g.
+    // "RU/BY/UA/СНГ", "РУ + МИР", and even mixed "CHГ".
+    // Strip all of these before comparing game titles.
+    /\b(?:ru|ру|rf|рф|ua|уа|by|бу|kz|кз|tr|тр|ar|ар|cis|снг|chг|chн|снg|world)\b/gi
   ];
   for (const re of noise) s = s.replace(re, ' ');
 
@@ -399,6 +403,7 @@ async function runAutomaticMatchSync(force = false) {
         report.unresolved.push({
           productId,
           name: product.name,
+          normalizedName: baseGameTitle(product.name),
           reason: steamSearches >= AUTO_MATCH_MAX_STEAM_SEARCHES ? 'search_limit' : 'low_confidence'
         });
       }
