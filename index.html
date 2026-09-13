@@ -475,10 +475,14 @@
 
   async function enhanceWithSteamPrices(products) {
     const targets = products
-      .map(product => ({ product, target: getSteamTarget(product) }))
-      .filter(x => x.target);
+      .map(product => ({ product, target: getSteamTarget(product) }));
 
-    await Promise.allSettled(targets.map(async ({ product, target }) => {
+    targets.filter(x => !x.target).forEach(({ product }) => {
+      const el = document.getElementById(`steam-cmp-${product.id}`);
+      if (el) el.remove();
+    });
+
+    await Promise.allSettled(targets.filter(x => x.target).map(async ({ product, target }) => {
       const el = document.getElementById(`steam-cmp-${product.id}`);
       if (!el) return;
 
@@ -742,7 +746,7 @@
               <div class="text-[10px] uppercase tracking-wide text-nox-muted">Цена у нас</div>
               <div class="mt-0.5 font-display text-xl font-bold text-nox-accent">${formatNum(price)} ${CURRENCY_SYMBOL}</div>
               ${oldPrice ? `<div class="mt-0.5 text-[11px] text-nox-muted line-through">${formatNum(oldPrice)} ${CURRENCY_SYMBOL}</div>` : ''}
-              ${getSteamTarget(p) ? `
+              ${real ? `
                 <div id="steam-cmp-${p.id}" class="mt-2 border-t border-nox-border pt-2">
                   <div class="text-[10px] text-nox-muted">Проверяем цену Steam…</div>
                 </div>

@@ -11,6 +11,13 @@ const PORT = 3000;
 const HOST = '127.0.0.1';
 const MATCHES_FILE = '/var/www/zibstore/data/steam-matches.json';
 const REGION_ORDER = ['ru', 'kz', 'ua', 'us'];
+const DIGISELLER_SELLER_ID = 810015;
+const DIGISELLER_API_BASE = 'https://api.digiseller.com/api';
+const AUTO_MATCH_SYNC_INTERVAL_MS = 5 * 60 * 1000;
+const AUTO_MATCH_MAX_STEAM_SEARCHES = 40;
+let autoMatchLastSyncAt = 0;
+let autoMatchSyncPromise = null;
+let autoMatchLastReport = null;
 const COVER_DIR = '/var/www/zibstore/api/covers';
 const CUSTOM_COVER_DIR = '/var/www/zibstore/api/custom-covers';
 const PUBLIC_API_BASE = String(process.env.PUBLIC_API_BASE || 'https://api.zibstore.ru').replace(/\/$/, '');
@@ -95,6 +102,334 @@ function extractSteamPageImages(html) {
 
   urls.push(...cdnMatches.map(decodeHtmlAttr));
   return [...new Set(urls)];
+}
+
+
+function cleanSalesTitle(value) {
+  let s = String(value || '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[’`´]/g, "'")
+    .replace(/[\u{1F000}-\u{1FAFF}]/gu, ' ');
+
+  const noise = [
+    /\bsteam\b/gi,
+    /\bgift\b/gi,
+    /\bkey\b/gi,
+    /\bauto(?:delivery)?\b/gi,
+    /\bавто(?:доставка)?\b/gi,
+    /\bключ\b/gi,
+    /\bгифт\b/gi,
+    /\bподарок\b/gi,
+    /\bбонус\b/gi,
+    /\bдля\s+россии\b/gi,
+    /\bроссия\b/gi,
+    /\bвесь\s+мир\b/gi,
+    /\bмир\b/gi,
+    /\bснг\b/gi,
+    /\bрф\b/gi,
+    /\bвыбор\s+издания\b/gi,
+    /\bstandard\s+edition\b/gi,
+    /\bstandard\b/gi,
+    /\b(?:ru|ua|by|kz|tr|ar|cis)\b/gi
+  ];
+  for (const re of noise) s = s.replace(re, ' ');
+
+  return s
+    .replace(/[+*|/\\()[\]{}<>—–_-]+/g, ' ')
+    .replace(/[^a-zа-яё0-9:'&.]+/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function editionInfo(value) {
+  const s = String(value || '').toLowerCase();
+  const tags = [
+    ['premium', /\bpremium\b/i],
+    ['deluxe', /\bdeluxe\b/i],
+    ['ultimate', /\bultimate\b/i],
+    ['gold', /\bgold\b/i],
+    ['complete', /\bcomplete\b/i],
+    ['collector', /\bcollector'?s?\b/i],
+    ['definitive', /\bdefinitive\b/i],
+    ['anniversary', /\banniversary\b/i],
+    ['bundle', /\bbundle\b/i],
+    ['standard', /\bstandard(?:\s+edition)?\b/i]
+  ];
+  const hit = tags.find(([, re]) => re.test(s));
+  return { tag: hit ? hit[0] : null, flexible: /выбор\s+издания/i.test(s) };
+}
+
+function baseGameTitle(value) {
+  return cleanSalesTitle(value)
+    .replace(/\b(?:premium|deluxe|ultimate|gold|complete|collector'?s?|definitive|anniversary|bundle)(?:\s+edition)?\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function titleTokens(value) {
+  return new Set(baseGameTitle(value).split(/\s+/).filter(x => x.length > 1));
+}
+
+function titleSimilarity(a, b) {
+  const aa = baseGameTitle(a);
+  const bb = baseGameTitle(b);
+  if (!aa || !bb) return 0;
+  if (aa === bb) return 1;
+
+  const A = titleTokens(a);
+  const B = titleTokens(b);
+  if (!A.size || !B.size) return 0;
+
+  let intersection = 0;
+  for (const t of A) if (B.has(t)) intersection++;
+  const union = new Set([...A, ...B]).size;
+  const jaccard = union ? intersection / union : 0;
+  const containment = intersection / Math.min(A.size, B.size);
+  const contains = aa.includes(bb) || bb.includes(aa) ? 0.08 : 0;
+
+  return Math.min(1, (jaccard * 0.58) + (containment * 0.34) + contains);
+}
+
+function editionsCompatible(currentTitle, knownTitle) {
+  const a = editionInfo(currentTitle);
+  const b = editionInfo(knownTitle);
+
+  if (a.flexible || b.flexible) return true;
+  if (!a.tag && !b.tag) return true;
+  if (a.tag === 'standard' && !b.tag) return true;
+  if (b.tag === 'standard' && !a.tag) return true;
+  if (!a.tag || !b.tag) return false;
+  return a.tag === b.tag;
+}
+
+function cloneHistoricalMatch(product, matches) {
+  const candidates = [];
+
+  for (const [oldProductId, item] of Object.entries(matches || {})) {
+    if (!item?.steamId || !item?.title) continue;
+    if (String(oldProductId) === String(product.id)) continue;
+    if (!editionsCompatible(product.name, item.title)) continue;
+
+    const score = titleSimilarity(product.name, item.title);
+    if (score < 0.92) continue;
+    candidates.push({ oldProductId, item, score });
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+  const best = candidates[0];
+  const second = candidates[1];
+  if (!best) return null;
+
+  const exactBase = baseGameTitle(product.name) === baseGameTitle(best.item.title);
+  const margin = best.score - (second?.score || 0);
+  if (!exactBase && (best.score < 0.965 || margin < 0.08)) return null;
+
+  return {
+    type: best.item.type === 'package' ? 'package' : 'app',
+    steamId: String(best.item.steamId),
+    title: String(product.name || best.item.title),
+    region: 'ru',
+    savedAt: new Date().toISOString(),
+    coverMode: best.item.coverMode || 'steam',
+    ...(best.item.coverAppId ? { coverAppId: String(best.item.coverAppId) } : {}),
+    ...(best.item.coverUrl ? { coverUrl: String(best.item.coverUrl) } : {}),
+    ...(best.item.coverSource ? { coverSource: String(best.item.coverSource) } : {}),
+    autoMatched: true,
+    matchSource: 'history',
+    matchedFromProductId: String(best.oldProductId),
+    matchConfidence: Math.round(best.score * 1000) / 1000
+  };
+}
+
+async function steamStoreSearch(term) {
+  const q = String(term || '').trim();
+  if (!q) return [];
+
+  try {
+    const data = await fetchJson(
+      `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(q)}&l=english&cc=us`
+    );
+    return Array.isArray(data?.items) ? data.items : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+async function matchFromSteamSearch(product) {
+  const currentEdition = editionInfo(product.name);
+
+  // A new paid edition/package cannot safely be inferred from a base app.
+  // Seller changes are still automated through historical matches above.
+  if (currentEdition.tag && currentEdition.tag !== 'standard') return null;
+
+  const query = baseGameTitle(product.name);
+  if (!query || query.length < 3) return null;
+
+  const items = await steamStoreSearch(query);
+  const scored = [];
+
+  for (const item of items.slice(0, 12)) {
+    if (!item?.id || !item?.name) continue;
+
+    const score = titleSimilarity(product.name, item.name);
+    const exactBase = baseGameTitle(product.name) === baseGameTitle(item.name);
+    if (!exactBase && score < 0.97) continue;
+
+    scored.push({ item, score, exactBase });
+  }
+
+  scored.sort((a, b) => {
+    if (a.exactBase !== b.exactBase) return a.exactBase ? -1 : 1;
+    return b.score - a.score;
+  });
+
+  const best = scored[0];
+  const second = scored[1];
+  if (!best) return null;
+
+  if (!best.exactBase) {
+    const margin = best.score - (second?.score || 0);
+    if (best.score < 0.985 || margin < 0.10) return null;
+  }
+
+  return {
+    type: 'app',
+    steamId: String(best.item.id),
+    title: String(product.name || best.item.name),
+    region: 'ru',
+    savedAt: new Date().toISOString(),
+    coverMode: 'steam',
+    autoMatched: true,
+    matchSource: 'steam-search',
+    steamSearchName: String(best.item.name),
+    matchConfidence: best.exactBase ? 1 : Math.round(best.score * 1000) / 1000
+  };
+}
+
+async function fetchDigisellerCatalog() {
+  const catData = await fetchJson(
+    `${DIGISELLER_API_BASE}/categories?seller_id=${DIGISELLER_SELLER_ID}&format=json`
+  );
+  const categories = Array.isArray(catData?.category) ? catData.category : [];
+
+  const all = [];
+  const seen = new Set();
+
+  for (const category of categories) {
+    if (!category?.id) continue;
+
+    try {
+      const data = await fetchJson(
+        `${DIGISELLER_API_BASE}/shop/products?seller_id=${DIGISELLER_SELLER_ID}` +
+        `&category_id=${encodeURIComponent(category.id)}&rows=100&currency=RUR&format=json`
+      );
+      const products = Array.isArray(data?.product) ? data.product : [];
+
+      for (const p of products) {
+        const id = String(p?.id || '').trim();
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        all.push({ id, name: String(p?.name || '') });
+      }
+    } catch (err) {
+      console.warn('Digiseller category sync failed:', category.id, err.message);
+    }
+  }
+
+  return all;
+}
+
+async function runAutomaticMatchSync(force = false) {
+  const now = Date.now();
+
+  if (!force && autoMatchLastSyncAt && now - autoMatchLastSyncAt < AUTO_MATCH_SYNC_INTERVAL_MS) {
+    return autoMatchLastReport || { ok: true, skipped: true, reason: 'interval' };
+  }
+  if (autoMatchSyncPromise) return autoMatchSyncPromise;
+
+  autoMatchSyncPromise = (async () => {
+    const report = {
+      ok: true,
+      scanned: 0,
+      alreadyMatched: 0,
+      inherited: 0,
+      steamSearchMatched: 0,
+      unresolved: [],
+      errors: []
+    };
+
+    try {
+      const products = await fetchDigisellerCatalog();
+      const matches = readSteamMatchesFile();
+      let changed = false;
+      let steamSearches = 0;
+
+      report.scanned = products.length;
+
+      for (const product of products) {
+        const productId = String(product.id);
+
+        if (matches[productId]?.steamId) {
+          report.alreadyMatched++;
+          continue;
+        }
+
+        // Safest case: same game was previously sold under another Digiseller Product ID.
+        const inherited = cloneHistoricalMatch(product, matches);
+        if (inherited) {
+          matches[productId] = inherited;
+          changed = true;
+          report.inherited++;
+          continue;
+        }
+
+        // Truly new title: ask Steam and auto-accept only high-confidence app matches.
+        if (steamSearches < AUTO_MATCH_MAX_STEAM_SEARCHES) {
+          steamSearches++;
+          const steam = await matchFromSteamSearch(product);
+          if (steam) {
+            matches[productId] = steam;
+            changed = true;
+            report.steamSearchMatched++;
+            continue;
+          }
+        }
+
+        report.unresolved.push({
+          productId,
+          name: product.name,
+          reason: steamSearches >= AUTO_MATCH_MAX_STEAM_SEARCHES ? 'search_limit' : 'low_confidence'
+        });
+      }
+
+      if (changed) writeSteamMatchesFile(matches);
+
+      autoMatchLastSyncAt = Date.now();
+      autoMatchLastReport = report;
+
+      console.log('Digiseller automatic Steam sync:', JSON.stringify({
+        scanned: report.scanned,
+        alreadyMatched: report.alreadyMatched,
+        inherited: report.inherited,
+        steamSearchMatched: report.steamSearchMatched,
+        unresolved: report.unresolved.length
+      }));
+
+      return report;
+    } catch (err) {
+      report.ok = false;
+      report.errors.push(err.message);
+      autoMatchLastSyncAt = Date.now();
+      autoMatchLastReport = report;
+      console.error('Automatic Steam match sync failed:', err.message);
+      return report;
+    } finally {
+      autoMatchSyncPromise = null;
+    }
+  })();
+
+  return autoMatchSyncPromise;
 }
 
 async function getAppPrice(appid, cc) {
@@ -953,14 +1288,28 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/api/steam-matches') {
+    const sync = await runAutomaticMatchSync(false);
     return json(res, 200, {
-      version: 1,
-      matches: readMatches()
+      version: 2,
+      matches: readMatches(),
+      autoSync: {
+        ok: sync?.ok !== false,
+        lastSyncAt: autoMatchLastSyncAt || null,
+        inherited: Number(sync?.inherited || 0),
+        steamSearchMatched: Number(sync?.steamSearchMatched || 0),
+        unresolved: Array.isArray(sync?.unresolved) ? sync.unresolved.length : 0
+      }
     });
   }
 
 
 
+
+  if (url.pathname === '/api/admin/sync-digiseller' && req.method === 'POST') {
+    if (!requireAdmin(req, res)) return;
+    const report = await runAutomaticMatchSync(true);
+    return adminJson(res, report.ok === false ? 502 : 200, report);
+  }
 
   if (url.pathname === '/api/admin/login' && req.method === 'POST') {
     const ip = getClientIp(req);

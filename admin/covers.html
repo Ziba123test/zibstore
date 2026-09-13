@@ -110,6 +110,8 @@
         <option value="steam">Только Steam</option>
       </select>
       <button id="reload">Обновить</button>
+      <button id="syncDigiseller">Синхронизировать Digiseller</button>
+      <span id="syncStatus" class="muted"></span>
     </div>
 
     <div id="grid" class="grid"></div>
@@ -788,6 +790,25 @@ document.querySelector('#logout').addEventListener('click', async () => {
 document.querySelector('#q').addEventListener('input',render);
 document.querySelector('#filter').addEventListener('change',render);
 document.querySelector('#reload').onclick=load;
+
+document.querySelector('#syncDigiseller').onclick = async () => {
+  const el = document.querySelector('#syncStatus');
+  el.textContent = 'Синхронизация…';
+
+  try{
+    const r = await apiFetch('/api/admin/sync-digiseller',{method:'POST'});
+    const data = await r.json();
+    if(!r.ok || !data.ok) throw new Error((data.errors || []).join(', ') || `HTTP ${r.status}`);
+
+    el.textContent =
+      `Готово: из истории ${data.inherited || 0}, через Steam ${data.steamSearchMatched || 0}, ` +
+      `не определено ${Array.isArray(data.unresolved) ? data.unresolved.length : 0}.`;
+
+    await load();
+  }catch(e){
+    if(e.message !== 'Unauthorized') el.textContent = `Ошибка: ${e.message}`;
+  }
+};
 
 if(token){
   load();
