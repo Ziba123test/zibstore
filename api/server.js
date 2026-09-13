@@ -124,7 +124,12 @@ function cleanSalesTitle(value) {
     /весь\s+мир/giu,
     /для\s+россии/giu,
     /standard\s+edition/giu,
-    /steam\s+auto/giu
+    /steam\s+auto/giu,
+
+    // Digiseller sellers often append service/commission percentages to titles:
+    // "0%", "5%", "+5%" etc. If '%' is stripped first, the leftover number
+    // becomes a fake game-title token and breaks exact matching.
+    /(?:^|\s)[+\-]?\d+(?:[.,]\d+)?\s*%(?=\s|$)/giu
   ];
   for (const re of phrases) s = s.replace(re, ' ');
 
@@ -147,11 +152,17 @@ function cleanSalesTitle(value) {
     'standard','edition'
   ]);
 
-  return s
+  const tokens = s
     .split(/\s+/)
-    .filter(token => token && !noiseTokens.has(token))
-    .join(' ')
-    .trim();
+    .filter(token => token && !noiseTokens.has(token));
+
+  // A percentage may be written with unusual spacing and lose the '%' during cleanup.
+  // Remove a lone trailing small numeric token only when the rest already looks like a title.
+  if (tokens.length >= 3 && /^\d{1,2}$/.test(tokens[tokens.length - 1])) {
+    tokens.pop();
+  }
+
+  return tokens.join(' ').trim();
 }
 
 function editionInfo(value) {
