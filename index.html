@@ -333,9 +333,15 @@
     const exact = STEAM_PRICE_MAP.byDigisellerId[String(product.id)];
     if (exact) return { ...exact, region: 'ru' };
 
-    const name = String(product.name || '');
-    const target = STEAM_PRICE_MAP.byName.find(rule => rule.test(name))?.target || null;
-    return target ? { ...target, region: 'ru' } : null;
+    // IMPORTANT: do not guess Steam AppID from the product title.
+    // Broad title rules can map a sequel/remaster/retold edition to an older game.
+    // Example: "Rayman Legends Retold" matched /Rayman Legends/ and was incorrectly
+    // compared with AppID 242550 (Rayman Legends 2013).
+    console.warn('ZibStore: no exact Steam match for product', {
+      productId: String(product.id),
+      name: String(product.name || '')
+    });
+    return null;
   }
 
   // Steam API на нашем собственном VPS.
