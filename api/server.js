@@ -737,7 +737,10 @@ function parsePlatiPublicReviews(html) {
     // Seller replies, if Plati marks them explicitly.
     const commentNode =
       extractElementByDataType(block, 'comment') ||
-      extractElementByDataType(block, 'answer');
+      extractElementByDataType(block, 'answer') ||
+      extractElementByDataType(block, 'response') ||
+      extractElementByDataType(block, 'reply') ||
+      extractElementByDataType(block, 'seller-comment');
 
     reviews.push({
       id: String(id || ''),
