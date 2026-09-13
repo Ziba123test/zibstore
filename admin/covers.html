@@ -55,6 +55,15 @@
     .option-status{font-size:12px;margin-bottom:8px}
     .idealText{color:#6ee7a8}.goodText{color:#f7c96b}.badText{color:#ff9a85}
     .option button{width:100%}
+    .cover-status{position:absolute;right:10px;top:10px;padding:6px 8px;border-radius:8px;font-size:11px;font-weight:800;background:#111d}
+    .cover-status.ok{color:#7ae7a5;border:1px solid #315f42}
+    .cover-status.format{color:#ffd06a;border:1px solid #66501f}
+    .cover-status.replace{color:#ff9a85;border:1px solid #713d35}
+    .source-pill{display:inline-flex;margin-top:6px;padding:3px 7px;border:1px solid #3a312c;border-radius:999px;font-size:11px;color:#bdb4ad}
+    .subactions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+    .subactions input[type=file]{display:none}
+    .hint{font-size:11px;color:#8e847d;margin-top:5px}
+    .picker-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0 14px}
   </style>
 </head>
 <body>
@@ -91,9 +100,14 @@
       <input id="q" placeholder="Поиск по названию / ID" />
       <select id="filter">
         <option value="all">Все</option>
+        <option value="problem">Надо проверить</option>
+        <option value="format">Не подходит по формату</option>
+        <option value="replace">Надо заменить</option>
+        <option value="ok">ОК</option>
         <option value="custom">Только custom</option>
+        <option value="upload">Только загруженные</option>
         <option value="coverAppId">С coverAppId</option>
-        <option value="steam">Обычный Steam</option>
+        <option value="steam">Только Steam</option>
       </select>
       <button id="reload">Обновить</button>
     </div>
@@ -111,6 +125,10 @@
       <button id="pickerClose">Закрыть</button>
     </div>
     <div id="pickerStatus" class="status"></div>
+    <div class="picker-controls">
+      <label><input id="pickerShowAll" type="checkbox"> Показать все допустимые Steam-варианты</label>
+      <span class="muted">По умолчанию показываются только вертикальные варианты, подходящие для карточки.</span>
+    </div>
     <div id="pickerGrid" class="picker-grid"></div>
   </div>
 </div>
@@ -180,9 +198,14 @@ function visible(item){
   const text = `${item.title} ${item.productId} ${item.steamId} ${item.coverAppId||''}`.toLowerCase();
 
   if(q && !text.includes(q)) return false;
+  if(f === 'problem' && !['format','replace'].includes(item.coverStatus)) return false;
+  if(f === 'format' && item.coverStatus !== 'format') return false;
+  if(f === 'replace' && item.coverStatus !== 'replace') return false;
+  if(f === 'ok' && item.coverStatus !== 'ok') return false;
   if(f === 'custom' && item.coverMode !== 'custom') return false;
+  if(f === 'upload' && item.coverSource !== 'upload') return false;
   if(f === 'coverAppId' && !item.coverAppId) return false;
-  if(f === 'steam' && (item.coverMode === 'custom' || item.coverAppId)) return false;
+  if(f === 'steam' && item.coverMode === 'custom') return false;
   return true;
 }
 
@@ -231,11 +254,19 @@ async function openPicker(div,item){
     if(!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
 
     const options = data.options || [];
-    status.textContent = options.length
-      ? `AppID ${data.appId}: найдено вариантов — ${options.length}. Лучшие идут первыми.`
-      : `AppID ${data.appId}: подходящих изображений Steam не найдено.`;
+    const showAllBox = document.querySelector('#pickerShowAll');
+    showAllBox.checked = false;
 
-    for(const option of options){
+    const drawOptions = () => {
+      grid.innerHTML = '';
+      const showAll = showAllBox.checked;
+      const visibleOptions = showAll ? options : options.filter(x => x.recommended);
+
+      status.textContent = visibleOptions.length
+        ? `AppID ${data.appId}: показано ${visibleOptions.length} из ${options.length}. Лучшие идут первыми.`
+        : `AppID ${data.appId}: вертикальных вариантов подходящего формата не найдено. Можно включить «Показать все».`;
+
+      for(const option of visibleOptions){
       const st = optionStatus(option);
       const el = document.createElement('div');
       el.className = `option ${option.ideal ? 'ideal' : option.suitable ? 'good' : ''}`;
@@ -257,6 +288,7 @@ async function openPicker(div,item){
         // Exact Steam image URL becomes the selected cover.
         mode.value = 'custom';
         urlInput.value = option.url;
+        item.coverSource = 'url';
 
         // Keep coverAppId only as a search hint; custom URL controls the displayed cover.
         const url = coverEndpoint(readCard(div,item));
@@ -268,8 +300,12 @@ async function openPicker(div,item){
         closePicker();
       };
 
-      grid.appendChild(el);
-    }
+        grid.appendChild(el);
+      }
+    };
+
+    showAllBox.onchange = drawOptions;
+    drawOptions();
   }catch(e){
     if(e.message !== 'Unauthorized'){
       status.textContent = e.message;
@@ -290,11 +326,14 @@ function card(item){
   div.innerHTML = `
     <div class="cover">
       <span class="badge">${escapeHtml(item.type)} · ${escapeHtml(item.steamId)}</span>
+      <span class="cover-status ${escapeHtml(item.coverStatus||'replace')}">${escapeHtml(item.coverStatusLabel||'Проверка')}</span>
       <img alt="" src="${escapeHtml(coverEndpoint(item))}">
     </div>
     <div class="body">
       <div class="title">${escapeHtml(item.title || `Product ${item.productId}`)}</div>
-      <div class="meta">Product ID: ${escapeHtml(item.productId)}</div>
+      <div class="meta">Product ID: ${escapeHtml(item.productId)}
+        <div class="source-pill">Источник: ${escapeHtml(item.coverSourceType || item.coverSource || 'steam')}</div>
+      </div>
 
       <div class="row">
         <label>Режим</label>
@@ -310,18 +349,178 @@ function card(item){
       </div>
 
       <div class="row">
-        <label>coverUrl — своя картинка</label>
-        <input data-k="coverUrl" value="${escapeHtml(item.coverUrl||'')}" placeholder="/covers/custom/game.webp или https://...">
+        <label>Текущий coverUrl</label>
+        <input data-k="coverUrl" value="${escapeHtml(item.coverUrl||'')}" placeholder="Заполняется после выбора/импорта">
+      </div>
+
+      <div class="row">
+        <label>Внешняя картинка (например IGN)</label>
+        <input data-k="externalUrl" placeholder="https://assets-prd.ignimgs.com/...jpg">
+        <div class="subactions">
+          <button data-action="importUrl">Скачать и применить</button>
+        </div>
+        <div class="hint">Картинка копируется на твой VPS и дальше не зависит от внешнего CDN.</div>
+      </div>
+
+      <div class="row">
+        <label>Ручная загрузка</label>
+        <div class="subactions">
+          <button data-action="chooseFile">Выбрать файл</button>
+          <input data-k="file" type="file" accept="image/png,image/jpeg,image/webp,image/avif">
+          <span data-k="fileName" class="muted"></span>
+        </div>
+        <div class="hint">PNG/JPG/WEBP/AVIF, до 12 МБ. Пропорции сохраняются — постер не растягивается.</div>
       </div>
 
       <div class="actions">
         <button class="primary" data-action="save">Сохранить</button>
         <button data-action="picker">Подобрать</button>
         <button data-action="preview">Превью</button>
+        <button data-action="reset">Сбросить на Steam</button>
       </div>
       <div class="status"></div>
     </div>
   `;
+
+  const fileInput = div.querySelector('[data-k="file"]');
+  const fileName = div.querySelector('[data-k="fileName"]');
+
+  div.querySelector('[data-action="chooseFile"]').onclick = () => fileInput.click();
+
+  fileInput.onchange = () => {
+    const file = fileInput.files?.[0];
+    fileName.textContent = file ? `${file.name} · ${Math.round(file.size/1024)} КБ` : '';
+  };
+
+  div.querySelector('[data-action="importUrl"]').onclick = async () => {
+    const sourceUrl = div.querySelector('[data-k="externalUrl"]').value.trim();
+    const status = div.querySelector('.status');
+    if(!sourceUrl){
+      status.textContent = 'Вставь URL картинки.';
+      status.className = 'status err';
+      return;
+    }
+
+    status.textContent = 'Скачиваю и проверяю картинку…';
+    status.className = 'status';
+
+    try{
+      const r = await apiFetch('/api/admin/import-cover',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({productId:item.productId,url:sourceUrl})
+      });
+      const data = await r.json();
+      if(!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
+
+      Object.assign(item,data.item,{
+        coverStatus:data.cover.status,
+        coverStatusLabel:data.cover.statusLabel,
+        coverWidth:data.cover.width,
+        coverHeight:data.cover.height,
+        coverSource:'url',
+        coverSourceType:'url'
+      });
+
+      div.querySelector('[data-k="coverMode"]').value = 'custom';
+      div.querySelector('[data-k="coverUrl"]').value = data.item.coverUrl;
+      div.querySelector('img').src = data.item.coverUrl + '?_=' + Date.now();
+      status.textContent = `Импортировано ${data.cover.width}×${data.cover.height}: ${data.cover.statusLabel}`;
+      status.className = data.cover.status === 'ok' ? 'status ok' : 'status err';
+      setTimeout(load, 250);
+    }catch(e){
+      if(e.message !== 'Unauthorized'){
+        status.textContent = e.message;
+        status.className = 'status err';
+      }
+    }
+  };
+
+  div.querySelector('[data-action="chooseFile"]').ondblclick = () => {};
+
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files?.[0];
+    if(!file) return;
+
+    const status = div.querySelector('.status');
+    if(file.size > 12 * 1024 * 1024){
+      status.textContent = 'Файл больше 12 МБ.';
+      status.className = 'status err';
+      return;
+    }
+
+    status.textContent = 'Загружаю картинку…';
+    status.className = 'status';
+
+    try{
+      const dataUrl = await new Promise((resolve,reject)=>{
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error('Не удалось прочитать файл'));
+        reader.readAsDataURL(file);
+      });
+
+      const r = await apiFetch('/api/admin/upload-cover',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({productId:item.productId,dataUrl})
+      });
+      const data = await r.json();
+      if(!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
+
+      Object.assign(item,data.item,{
+        coverStatus:data.cover.status,
+        coverStatusLabel:data.cover.statusLabel,
+        coverWidth:data.cover.width,
+        coverHeight:data.cover.height,
+        coverSource:'upload',
+        coverSourceType:'upload'
+      });
+
+      div.querySelector('[data-k="coverMode"]').value = 'custom';
+      div.querySelector('[data-k="coverUrl"]').value = data.item.coverUrl;
+      div.querySelector('img').src = data.item.coverUrl + '?_=' + Date.now();
+      status.textContent = `Загружено ${data.cover.width}×${data.cover.height}: ${data.cover.statusLabel}`;
+      status.className = data.cover.status === 'ok' ? 'status ok' : 'status err';
+      setTimeout(load, 250);
+    }catch(e){
+      if(e.message !== 'Unauthorized'){
+        status.textContent = e.message;
+        status.className = 'status err';
+      }
+    }
+  });
+
+  div.querySelector('[data-action="reset"]').onclick = async () => {
+    const status = div.querySelector('.status');
+    status.textContent = 'Возвращаю Steam-обложку…';
+    status.className = 'status';
+
+    try{
+      const r = await apiFetch('/api/admin/covers',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          productId:item.productId,
+          coverMode:'steam',
+          coverAppId:div.querySelector('[data-k="coverAppId"]').value.trim(),
+          coverUrl:'',
+          coverSource:'steam'
+        })
+      });
+      const data = await r.json();
+      if(!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
+      Object.assign(item,data.item);
+      status.textContent = 'Возвращено на Steam.';
+      status.className = 'status ok';
+      setTimeout(load, 250);
+    }catch(e){
+      if(e.message !== 'Unauthorized'){
+        status.textContent = e.message;
+        status.className = 'status err';
+      }
+    }
+  };
 
   div.querySelector('[data-action="picker"]').onclick = () => openPicker(div,item);
 
@@ -345,7 +544,8 @@ function card(item){
           productId:item.productId,
           coverMode:current.coverMode,
           coverAppId:current.coverAppId,
-          coverUrl:current.coverUrl
+          coverUrl:current.coverUrl,
+          coverSource: current.coverMode === 'custom' ? (item.coverSource || 'url') : 'steam'
         })
       });
       const data = await r.json();

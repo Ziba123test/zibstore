@@ -2,6 +2,8 @@ const http = require('http');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const dns = require('dns').promises;
+const net = require('net');
 const sharp = require('sharp');
 const { URL } = require('url');
 
@@ -10,7 +12,10 @@ const HOST = '127.0.0.1';
 const MATCHES_FILE = '/var/www/zibstore/data/steam-matches.json';
 const REGION_ORDER = ['ru', 'kz', 'ua', 'us'];
 const COVER_DIR = '/var/www/zibstore/api/covers';
+const CUSTOM_COVER_DIR = '/var/www/zibstore/api/custom-covers';
+const PUBLIC_API_BASE = String(process.env.PUBLIC_API_BASE || 'https://api.zibstore.ru').replace(/\/$/, '');
 fs.mkdirSync(COVER_DIR, { recursive: true });
+fs.mkdirSync(CUSTOM_COVER_DIR, { recursive: true });
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -185,6 +190,225 @@ async function resolvePackageAppId(packageId) {
 }
 
 
+
+function classifyDimensions(width, height, extra = {}) {
+  width = Number(width || 0);
+  height = Number(height || 0);
+
+  if (!width || !height) {
+    return { status: 'replace', statusLabel: 'Надо заменить', ideal: false, suitable: false };
+  }
+
+  const ratio = width / height;
+  const ratioError = Math.abs(ratio - (2 / 3));
+  const portrait = ratio < 0.9;
+  const tooSmall = width < 300 || height < 450;
+  const ideal = portrait && !tooSmall && ratioError <= 0.08;
+  const suitable = portrait && !tooSmall && ratioError <= 0.18;
+
+  if (tooSmall) {
+    return { status: 'replace', statusLabel: 'Надо заменить', ideal, suitable, ratio };
+  }
+  if (!suitable) {
+    return { status: 'format', statusLabel: 'Не подходит по формату', ideal, suitable, ratio };
+  }
+  return { status: 'ok', statusLabel: 'ОК', ideal, suitable, ratio };
+}
+
+function isPrivateIp(ip) {
+  const family = net.isIP(ip);
+  if (!family) return true;
+
+  if (family === 4) {
+    const parts = ip.split('.').map(Number);
+    const [a, b] = parts;
+    return (
+      a === 10 ||
+      a === 127 ||
+      a === 0 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      a >= 224
+    );
+  }
+
+  const s = ip.toLowerCase();
+  return (
+    s === '::1' ||
+    s === '::' ||
+    s.startsWith('fc') ||
+    s.startsWith('fd') ||
+    s.startsWith('fe8') ||
+    s.startsWith('fe9') ||
+    s.startsWith('fea') ||
+    s.startsWith('feb')
+  );
+}
+
+async function assertSafeExternalUrl(raw) {
+  const u = new URL(String(raw || '').trim());
+  if (!['http:', 'https:'].includes(u.protocol)) throw new Error('Разрешены только http/https URL');
+  if (!u.hostname || u.hostname === 'localhost') throw new Error('Недопустимый host');
+
+  const records = await dns.lookup(u.hostname, { all: true, verbatim: true });
+  if (!records.length || records.some(r => isPrivateIp(r.address))) {
+    throw new Error('Локальные/служебные адреса запрещены');
+  }
+  return u.toString();
+}
+
+async function fetchExternalImageSafe(rawUrl, maxBytes = 12 * 1024 * 1024) {
+  const safeUrl = await assertSafeExternalUrl(rawUrl);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const res = await fetch(safeUrl, {
+      signal: controller.signal,
+      redirect: 'follow',
+      headers: {
+        'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+        'User-Agent': 'Mozilla/5.0 (compatible; ZibStoreCoverAdmin/1.0)'
+      }
+    });
+
+    if (!res.ok) throw new Error(`Источник вернул HTTP ${res.status}`);
+
+    const finalUrl = await assertSafeExternalUrl(res.url || safeUrl);
+    const type = String(res.headers.get('content-type') || '').toLowerCase();
+    if (!type.startsWith('image/')) throw new Error(`URL не является изображением (${type || 'unknown'})`);
+
+    const length = Number(res.headers.get('content-length') || 0);
+    if (length && length > maxBytes) throw new Error('Изображение слишком большое (максимум 12 МБ)');
+
+    const chunks = [];
+    let total = 0;
+    for await (const chunk of res.body) {
+      total += chunk.length;
+      if (total > maxBytes) throw new Error('Изображение слишком большое (максимум 12 МБ)');
+      chunks.push(Buffer.from(chunk));
+    }
+
+    return { buffer: Buffer.concat(chunks), source: finalUrl };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function saveCustomCoverBuffer(productId, inputBuffer, source = 'upload') {
+  if (!/^[A-Za-z0-9_-]+$/.test(String(productId || ''))) throw new Error('Invalid productId');
+
+  const meta = await sharp(inputBuffer).metadata();
+  const width = Number(meta.width || 0);
+  const height = Number(meta.height || 0);
+  if (!width || !height) throw new Error('Не удалось определить размер изображения');
+
+  // Preserve the source proportions. We only convert/limit size; no synthetic poster/cropping.
+  let pipeline = sharp(inputBuffer).rotate();
+  const maxW = 1800;
+  const maxH = 2700;
+  if (width > maxW || height > maxH) {
+    pipeline = pipeline.resize(maxW, maxH, { fit: 'inside', withoutEnlargement: true });
+  }
+
+  const filename = `product-${productId}.webp`;
+  const filePath = path.join(CUSTOM_COVER_DIR, filename);
+  await pipeline.webp({ quality: 92 }).toFile(filePath);
+
+  const savedMeta = await sharp(filePath).metadata();
+  const savedWidth = Number(savedMeta.width || width);
+  const savedHeight = Number(savedMeta.height || height);
+  const quality = classifyDimensions(savedWidth, savedHeight);
+
+  return {
+    filename,
+    filePath,
+    coverUrl: `${PUBLIC_API_BASE}/api/custom-cover/${encodeURIComponent(filename)}`,
+    width: savedWidth,
+    height: savedHeight,
+    source,
+    ...quality
+  };
+}
+
+async function inspectCustomUrl(rawUrl) {
+  const url = String(rawUrl || '').trim();
+  if (!url) return { status: 'replace', statusLabel: 'Надо заменить', width: 0, height: 0, sourceType: 'custom' };
+
+  const localPrefix = `${PUBLIC_API_BASE}/api/custom-cover/`;
+  if (url.startsWith(localPrefix)) {
+    const filename = decodeURIComponent(url.slice(localPrefix.length)).replace(/[^A-Za-z0-9._-]/g, '');
+    const filePath = path.join(CUSTOM_COVER_DIR, filename);
+    if (!fs.existsSync(filePath)) {
+      return { status: 'replace', statusLabel: 'Надо заменить', width: 0, height: 0, sourceType: 'upload' };
+    }
+    const meta = await sharp(filePath).metadata();
+    return {
+      width: Number(meta.width || 0),
+      height: Number(meta.height || 0),
+      sourceType: 'upload',
+      ...classifyDimensions(meta.width, meta.height)
+    };
+  }
+
+  try {
+    const found = await fetchExternalImageSafe(url, 12 * 1024 * 1024);
+    const meta = await sharp(found.buffer).metadata();
+    return {
+      width: Number(meta.width || 0),
+      height: Number(meta.height || 0),
+      sourceType: 'custom',
+      ...classifyDimensions(meta.width, meta.height)
+    };
+  } catch (_) {
+    return { status: 'replace', statusLabel: 'Надо заменить', width: 0, height: 0, sourceType: 'custom' };
+  }
+}
+
+async function inspectCoverItem(item) {
+  if (String(item.coverMode || 'steam').toLowerCase() === 'custom' && item.coverUrl) {
+    return inspectCustomUrl(item.coverUrl);
+  }
+
+  let appId = item.coverAppId ? String(item.coverAppId) : null;
+  if (!appId) {
+    appId = item.type === 'package'
+      ? await resolvePackageAppId(item.steamId)
+      : String(item.steamId || '');
+  }
+
+  if (!appId || !/^\d+$/.test(appId)) {
+    return { status: 'replace', statusLabel: 'Надо заменить', width: 0, height: 0, sourceType: 'steam' };
+  }
+
+  try {
+    const result = await getOrCreateCover('app', appId, false);
+    const quality = String(result.quality || 'unknown');
+    if (quality === 'native') {
+      return { status: 'ok', statusLabel: 'ОК', width: 600, height: 900, sourceType: 'steam' };
+    }
+    return { status: 'format', statusLabel: 'Не подходит по формату', width: 600, height: 900, sourceType: 'steam-fallback' };
+  } catch (_) {
+    return { status: 'replace', statusLabel: 'Надо заменить', width: 0, height: 0, sourceType: 'steam' };
+  }
+}
+
+async function mapWithConcurrency(entries, limit, mapper) {
+  const out = new Array(entries.length);
+  let cursor = 0;
+  async function worker() {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= entries.length) return;
+      out[idx] = await mapper(entries[idx], idx);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, entries.length || 1) }, worker));
+  return out;
+}
+
 async function getArtworkOptions(appId) {
   appId = String(appId || '').trim();
   if (!/^\d+$/.test(appId)) throw new Error('Invalid AppID');
@@ -256,9 +480,15 @@ async function getArtworkOptions(appId) {
       const ratio = width / height;
       const targetRatio = 2 / 3;
       const ratioError = Math.abs(ratio - targetRatio);
+      const quality = classifyDimensions(width, height);
       const portrait = ratio < 0.9;
-      const ideal = portrait && ratioError <= 0.08 && width >= 400 && height >= 600;
-      const suitable = portrait && ratioError <= 0.18 && width >= 300 && height >= 450;
+      const meaningless =
+        width < 260 ||
+        height < 260 ||
+        ratio < 0.32 ||
+        ratio > 2.4;
+
+      if (meaningless) continue;
 
       unique.push({
         label: candidate.label,
@@ -266,10 +496,13 @@ async function getArtworkOptions(appId) {
         width,
         height,
         ratio: Math.round(ratio * 1000) / 1000,
-        ideal,
-        suitable,
+        ideal: quality.ideal,
+        suitable: quality.suitable,
+        recommended: quality.status === 'ok',
+        status: quality.status,
+        statusLabel: quality.statusLabel,
         score:
-          (ideal ? 1000 : suitable ? 600 : portrait ? 300 : 0) +
+          (quality.ideal ? 1000 : quality.suitable ? 650 : portrait ? 250 : 0) +
           Math.min(width, 2000) / 20 -
           ratioError * 100
       });
@@ -648,6 +881,11 @@ function sanitizeCoverPatch(input = {}) {
     out.coverUrl = value || null;
   }
 
+  if ('coverSource' in input) {
+    const value = String(input.coverSource || '').trim().toLowerCase();
+    out.coverSource = ['steam', 'url', 'upload'].includes(value) ? value : null;
+  }
+
   return out;
 }
 
@@ -722,6 +960,113 @@ const server = http.createServer(async (req, res) => {
     return adminJson(res, 200, { ok: true });
   }
 
+
+  if (url.pathname.startsWith('/api/custom-cover/') && req.method === 'GET') {
+    const filename = decodeURIComponent(url.pathname.slice('/api/custom-cover/'.length));
+    if (!/^[A-Za-z0-9._-]+\.webp$/.test(filename)) {
+      return json(res, 400, { ok: false, error: 'Invalid filename' });
+    }
+
+    const filePath = path.join(CUSTOM_COVER_DIR, filename);
+    if (!fs.existsSync(filePath)) {
+      return json(res, 404, { ok: false, error: 'Cover not found' });
+    }
+
+    const buffer = fs.readFileSync(filePath);
+    res.writeHead(200, {
+      'Access-Control-Allow-Origin': '*',
+      'Content-Type': 'image/webp',
+      'Content-Length': buffer.length,
+      'Cache-Control': 'public, max-age=86400'
+    });
+    return res.end(buffer);
+  }
+
+  if (url.pathname === '/api/admin/import-cover' && req.method === 'POST') {
+    if (!requireAdmin(req, res)) return;
+
+    try {
+      const body = await readJsonBody(req, 64 * 1024);
+      const productId = String(body.productId || '').trim();
+      const sourceUrl = String(body.url || '').trim();
+      if (!productId || !sourceUrl) {
+        return adminJson(res, 400, { ok: false, error: 'productId and url are required' });
+      }
+
+      const matches = readSteamMatchesFile();
+      if (!matches[productId]) {
+        return adminJson(res, 404, { ok: false, error: 'Product mapping not found' });
+      }
+
+      const found = await fetchExternalImageSafe(sourceUrl);
+      const saved = await saveCustomCoverBuffer(productId, found.buffer, 'url');
+
+      matches[productId] = {
+        ...matches[productId],
+        coverMode: 'custom',
+        coverUrl: saved.coverUrl,
+        coverSource: 'url'
+      };
+      writeSteamMatchesFile(matches);
+
+      return adminJson(res, 200, {
+        ok: true,
+        productId,
+        item: matches[productId],
+        cover: saved
+      });
+    } catch (err) {
+      return adminJson(res, 400, { ok: false, error: err.message });
+    }
+  }
+
+  if (url.pathname === '/api/admin/upload-cover' && req.method === 'POST') {
+    if (!requireAdmin(req, res)) return;
+
+    try {
+      const body = await readJsonBody(req, 18 * 1024 * 1024);
+      const productId = String(body.productId || '').trim();
+      const dataUrl = String(body.dataUrl || '');
+      if (!productId || !dataUrl) {
+        return adminJson(res, 400, { ok: false, error: 'productId and dataUrl are required' });
+      }
+
+      const matches = readSteamMatchesFile();
+      if (!matches[productId]) {
+        return adminJson(res, 404, { ok: false, error: 'Product mapping not found' });
+      }
+
+      const m = dataUrl.match(/^data:image\/(?:png|jpe?g|webp|avif);base64,([A-Za-z0-9+/=]+)$/i);
+      if (!m) {
+        return adminJson(res, 400, { ok: false, error: 'Поддерживаются PNG, JPG, WEBP, AVIF' });
+      }
+
+      const buffer = Buffer.from(m[1], 'base64');
+      if (!buffer.length || buffer.length > 12 * 1024 * 1024) {
+        return adminJson(res, 400, { ok: false, error: 'Файл должен быть не больше 12 МБ' });
+      }
+
+      const saved = await saveCustomCoverBuffer(productId, buffer, 'upload');
+
+      matches[productId] = {
+        ...matches[productId],
+        coverMode: 'custom',
+        coverUrl: saved.coverUrl,
+        coverSource: 'upload'
+      };
+      writeSteamMatchesFile(matches);
+
+      return adminJson(res, 200, {
+        ok: true,
+        productId,
+        item: matches[productId],
+        cover: saved
+      });
+    } catch (err) {
+      return adminJson(res, 400, { ok: false, error: err.message });
+    }
+  }
+
   if (url.pathname === '/api/admin/cover-options' && req.method === 'GET') {
     if (!requireAdmin(req, res)) return;
 
@@ -757,16 +1102,28 @@ const server = http.createServer(async (req, res) => {
     if (!requireAdmin(req, res)) return;
 
     const matches = readSteamMatchesFile();
-    const items = Object.entries(matches).map(([productId, item]) => ({
-      productId,
-      type: item.type || 'app',
-      steamId: item.steamId || '',
-      title: item.title || '',
-      region: item.region || 'ru',
-      coverMode: item.coverMode || 'steam',
-      coverAppId: item.coverAppId || '',
-      coverUrl: item.coverUrl || ''
-    }));
+    const entries = Object.entries(matches);
+
+    const items = await mapWithConcurrency(entries, 4, async ([productId, item]) => {
+      const health = await inspectCoverItem(item);
+      return {
+        productId,
+        type: item.type || 'app',
+        steamId: item.steamId || '',
+        title: item.title || '',
+        region: item.region || 'ru',
+        coverMode: item.coverMode || 'steam',
+        coverAppId: item.coverAppId || '',
+        coverUrl: item.coverUrl || '',
+        coverSource: item.coverSource || (item.coverMode === 'custom' ? 'url' : 'steam'),
+        coverStatus: health.status,
+        coverStatusLabel: health.statusLabel,
+        coverWidth: health.width || 0,
+        coverHeight: health.height || 0,
+        coverSourceType: health.sourceType || ''
+      };
+    });
+
     return adminJson(res, 200, { ok: true, items });
   }
 
@@ -788,7 +1145,12 @@ const server = http.createServer(async (req, res) => {
 
       if (!next.coverAppId) delete next.coverAppId;
       if (!next.coverUrl) delete next.coverUrl;
+      if (!next.coverSource) delete next.coverSource;
       if (!next.coverMode) next.coverMode = 'steam';
+      if (next.coverMode === 'steam') {
+        delete next.coverUrl;
+        delete next.coverSource;
+      }
 
       matches[productId] = next;
       writeSteamMatchesFile(matches);
