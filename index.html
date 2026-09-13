@@ -260,6 +260,18 @@
                 <div id="product-reviews-list" class="max-h-[42vh] space-y-3 overflow-y-auto overflow-x-hidden pr-2">
                   <div class="text-sm text-nox-muted">Отзывы будут загружены при открытии вкладки.</div>
                 </div>
+                <a
+                  id="product-reviews-external"
+                  href="#"
+                  target="_blank"
+                  rel="noopener sponsored"
+                  class="mt-4 hidden w-full rounded-lg border border-nox-border bg-black/10 px-4 py-2.5 text-center text-sm font-semibold text-white transition hover:border-nox-accent/60 hover:text-nox-accent"
+                >
+                  Посмотреть отзывы на Plati
+                </a>
+                <div id="product-reviews-affiliate-note" class="mt-2 hidden text-center text-[10px] leading-relaxed text-nox-muted">
+                  Ссылка содержит партнёрский идентификатор ЗибСтор.
+                </div>
               </div>
             </div>
 
@@ -986,6 +998,26 @@
   }
 
 
+
+  function buildAffiliatePlatiUrl(productDetails) {
+    const raw = String(productDetails?.productUrl || '').trim();
+    if (!raw) return '';
+
+    try {
+      const url = new URL(raw, window.location.origin);
+
+      // Never send users to an arbitrary seller URL without our affiliate marker.
+      if (!/(^|\.)plati\.market$/i.test(url.hostname)) return '';
+
+      // Plati affiliate links use ?ai=PARTNER_ID (or &ai=...).
+      // SELLER_ID is already used by this storefront as agent=<ID> on Oplata.info.
+      url.searchParams.set('ai', String(SELLER_ID));
+      return url.toString();
+    } catch (_) {
+      return '';
+    }
+  }
+
   async function fetchSellerProductReviews(productId) {
     const key = String(productId || '');
     if (digisellerReviewsCache.has(key)) return digisellerReviewsCache.get(key);
@@ -1040,7 +1072,7 @@
 
     if (!reviews.length) {
       list.innerHTML = total
-        ? '<div class="text-sm text-nox-muted">Digiseller сообщает о наличии отзывов, но их текст не отдаётся через публичный API для этого лота.</div>'
+        ? '<div class="text-sm text-nox-muted">Digiseller подтверждает наличие отзывов, но не передаёт их текст через публичный API. Проверить оригинальные отзывы можно на Plati по партнёрской ссылке ниже.</div>'
         : '<div class="text-sm text-nox-muted">Отзывов пока нет.</div>';
       return;
     }
@@ -1224,6 +1256,12 @@
     const infoEl = document.getElementById('product-modal-info');
     const additionalWrap = document.getElementById('product-modal-additional-wrap');
     const additionalEl = document.getElementById('product-modal-additional');
+    const externalReviewsEl = document.getElementById('product-reviews-external');
+    const externalReviewsNoteEl = document.getElementById('product-reviews-affiliate-note');
+
+    externalReviewsEl.classList.add('hidden');
+    externalReviewsNoteEl.classList.add('hidden');
+    externalReviewsEl.removeAttribute('href');
 
     openedProductReviewsLoaded = false;
     document.getElementById('product-reviews-count').textContent = '';
@@ -1272,6 +1310,13 @@
 
       const info = String(details?.info || '').trim();
       const addInfo = String(details?.addInfo || '').trim();
+
+      const affiliateReviewUrl = buildAffiliatePlatiUrl(details);
+      if (affiliateReviewUrl) {
+        externalReviewsEl.href = affiliateReviewUrl;
+        externalReviewsEl.classList.remove('hidden');
+        externalReviewsNoteEl.classList.remove('hidden');
+      }
 
       infoEl.textContent = info || 'Продавец не добавил отдельное описание для этого лота. Подробные условия доступны на странице Oplata.info перед оплатой.';
 
