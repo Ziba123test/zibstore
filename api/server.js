@@ -610,38 +610,134 @@ function htmlAttrValue(tag, name) {
   return String(tag || '').match(re)?.[1] || '';
 }
 
+function extractElementByDataType(block, type) {
+  const source = String(block || '');
+  const re = new RegExp(
+    `<(div|p|span)\\b([^>]*\\bdata-tr-type=["']${type}["'][^>]*)>([\\s\\S]*?)<\\/\\1>`,
+    'i'
+  );
+  const match = source.match(re);
+  if (!match) return null;
+
+  return {
+    attrs: match[2] || '',
+    html: match[3] || '',
+    text: sellerText(match[3] || '', 4000)
+  };
+}
+
+function looksLikePlatiDate(text) {
+  const value = String(text || '').trim();
+  return /^\d{2}\.\d{2}\.\d{4}(?:\s+.*)?$/i.test(value);
+}
+
 function parsePlatiPublicReviews(html) {
   const source = String(html || '');
   const reviews = [];
 
-  // Do not depend on <li> wrappers. Plati returns the actual review text
-  // in div.digi-er-body, and wrapper markup may vary.
-  const bodyRe =
-    /<div\b([^>]*\bclass=["'][^"']*\bdigi-er-body\b[^"']*["'][^>]*)>([\s\S]*?)<\/div>/gi;
+  // The browser version we inspected marks the review text with:
+  //   data-tr-type="review"
+  // This attribute is more stable than the optional digi-er-body CSS class.
+  const itemBlocks = source.match(/<li\b[\s\S]*?<\/li>/gi) || [];
 
-  let match;
-  while ((match = bodyRe.exec(source))) {
-    const attrs = match[1] || '';
-    const info = sellerText(match[2], 4000);
+  for (const block of itemBlocks) {
+    let reviewNode = extractElementByDataType(block, 'review');
+
+    // Fallback #1: old/alternate markup with digi-er-body.
+    if (!reviewNode) {
+      const bodyMatch = block.match(
+        /<(div|p|span)\b([^>]*\bclass=["'][^"']*\bdigi-er-body\b[^"']*["'][^>]*)>([\s\S]*?)<\/\1>/i
+      );
+      if (bodyMatch) {
+        reviewNode = {
+          attrs: bodyMatch[2] || '',
+          html: bodyMatch[3] || '',
+          text: sellerText(bodyMatch[3] || '', 4000)
+        };
+      }
+    }
+
+    // Fallback #2: some Plati responses omit both the class and data-tr-type
+    // but keep data-tr-id on the text element.
+    if (!reviewNode) {
+      const idNodeMatch = block.match(
+        /<(div|p|span)\b([^>]*\bdata-tr-id=["'][^"']+["'][^>]*)>([\s\S]*?)<\/\1>/i
+      );
+      if (idNodeMatch) {
+        const candidate = sellerText(idNodeMatch[3] || '', 4000);
+        if (candidate && !looksLikePlatiDate(candidate)) {
+          reviewNode = {
+            attrs: idNodeMatch[2] || '',
+            html: idNodeMatch[3] || '',
+            text: candidate
+          };
+        }
+      }
+    }
+
+    // Fallback #3: extract visible text chunks from the <li> and choose the
+    // most plausible non-date/non-label review text.
+    if (!reviewNode) {
+      const candidates = [];
+      const nodeRe = /<(div|p|span)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+      let nodeMatch;
+
+      while ((nodeMatch = nodeRe.exec(block))) {
+        const text = sellerText(nodeMatch[2] || '', 4000);
+        if (!text) continue;
+        if (looksLikePlatiDate(text)) continue;
+        if (/^(?:отзыв|ответ продавца|положительный отзыв|отрицательный отзыв)$/i.test(text)) continue;
+        if (text.length > 2000) continue;
+
+        // Ignore pure numbers / navigation fragments.
+        if (/^[\d\s.,:+-]+$/.test(text)) continue;
+
+        candidates.push(text);
+      }
+
+      if (candidates.length) {
+        // In the public response the actual review is usually the shortest
+        // meaningful free-text chunk after the date, not the whole wrapper.
+        candidates.sort((a, b) => {
+          const aWords = a.split(/\s+/).length;
+          const bWords = b.split(/\s+/).length;
+          return aWords - bWords || a.length - b.length;
+        });
+
+        reviewNode = {
+          attrs: '',
+          html: '',
+          text: candidates[0]
+        };
+      }
+    }
+
+    const info = String(reviewNode?.text || '').trim();
     if (!info) continue;
 
-    const id = htmlAttrValue(attrs, 'data-tr-id');
+    const id =
+      htmlAttrValue(reviewNode?.attrs || '', 'data-tr-id') ||
+      htmlAttrValue(block, 'data-tr-id');
 
-    // Date sits shortly before the review body. Search only the local prefix
-    // so we don't accidentally attach a date from a different review.
-    const prefix = source.slice(Math.max(0, match.index - 1600), match.index);
-    const dateMatches = [...prefix.matchAll(
-      /<span\b[^>]*\bclass=["'][^"']*\bfootnote-regular\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/gi
-    )];
-    const lastDate = dateMatches.length ? dateMatches[dateMatches.length - 1][1] : '';
-    const date = sellerText(lastDate, 500);
+    // Date: choose the last date-like span/p before/inside this list item.
+    const dateCandidates = [];
+    const dateNodeRe = /<(?:span|p)\b[^>]*>([\s\S]*?)<\/(?:span|p)>/gi;
+    let dateMatch;
+    while ((dateMatch = dateNodeRe.exec(block))) {
+      const text = sellerText(dateMatch[1] || '', 500);
+      if (looksLikePlatiDate(text)) dateCandidates.push(text);
+    }
+    const date = dateCandidates.length ? dateCandidates[0] : '';
 
-    // The icon for a negative review is different from the normal thumb-up.
-    const localBlock = source.slice(Math.max(0, match.index - 1200), match.index + match[0].length + 300);
     const isNegative =
-      /#thumb-down\b/i.test(localBlock) ||
-      /\bthumb-down\b/i.test(localBlock) ||
-      /\bicon-error\b/i.test(localBlock);
+      /#thumb-down\b/i.test(block) ||
+      /\bthumb-down\b/i.test(block) ||
+      /\bicon-error\b/i.test(block);
+
+    // Seller replies, if Plati marks them explicitly.
+    const commentNode =
+      extractElementByDataType(block, 'comment') ||
+      extractElementByDataType(block, 'answer');
 
     reviews.push({
       id: String(id || ''),
@@ -649,7 +745,7 @@ function parsePlatiPublicReviews(html) {
       good: isNegative ? 0 : 1,
       date,
       info,
-      comment: ''
+      comment: String(commentNode?.text || '').trim()
     });
   }
 
@@ -762,6 +858,8 @@ async function getPlatiPublicReviews({
       diagnostics: {
         bytes: Buffer.byteLength(html, 'utf8'),
         hasReviewBody: /\bdigi-er-body\b/i.test(html),
+        hasReviewDataType: /data-tr-type=["']review["']/i.test(html),
+        hasDataTrId: /data-tr-id=["'][^"']+["']/i.test(html),
         hasListItem: /<li\b/i.test(html),
         cookieBootstrap: Boolean(cookieHeader)
       }
