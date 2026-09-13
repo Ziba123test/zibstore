@@ -197,44 +197,42 @@
               <p id="product-modal-subtitle" class="mt-2 text-sm leading-relaxed text-nox-muted"></p>
             </div>
 
-            <div class="mt-6 grid gap-3 sm:grid-cols-2">
-              <div class="rounded-xl border border-nox-accent/35 bg-nox-accent/5 p-4">
-                <div class="text-[10px] uppercase tracking-wide text-nox-muted">Цена предложения</div>
-                <div id="product-modal-price" class="mt-1 font-display text-2xl font-bold text-nox-accent"></div>
-                <div class="mt-1 text-xs text-nox-muted">Покупка оформляется на Oplata.info</div>
+            <div class="mt-6 overflow-hidden rounded-xl border border-nox-border bg-nox-card/60">
+              <div class="grid sm:grid-cols-2">
+                <div class="p-4 sm:border-r sm:border-nox-border">
+                  <div class="text-[10px] uppercase tracking-wide text-nox-muted">Цена предложения</div>
+                  <div id="product-modal-price" class="mt-1 font-display text-2xl font-bold text-nox-accent"></div>
+                  <div class="mt-1 text-xs text-nox-muted">Покупка оформляется на Oplata.info</div>
+                </div>
+                <div class="border-t border-nox-border p-4 sm:border-t-0">
+                  <div class="text-[10px] uppercase tracking-wide text-nox-muted">Цена в Steam</div>
+                  <div id="product-modal-steam-price" class="mt-1 font-display text-2xl font-bold text-white/80">—</div>
+                  <div id="product-modal-steam-region" class="mt-1 text-xs text-nox-muted">Проверяем актуальную цену</div>
+                </div>
               </div>
-
-              <div class="rounded-xl border border-nox-border bg-nox-card p-4">
-                <div class="text-[10px] uppercase tracking-wide text-nox-muted">Цена в Steam</div>
-                <div id="product-modal-steam-price" class="mt-1 font-display text-2xl font-bold text-white/80">—</div>
-                <div id="product-modal-steam-region" class="mt-1 text-xs text-nox-muted">Проверяем актуальную цену</div>
-              </div>
-            </div>
-
-            <div id="product-modal-saving" class="mt-3 hidden rounded-xl border border-emerald-500/25 bg-emerald-500/10 p-4">
-              <div class="text-xs text-nox-muted">Сравнение цен</div>
-              <div id="product-modal-saving-value" class="mt-1 text-lg font-bold text-emerald-300"></div>
-            </div>
-
-            <div class="mt-6 grid gap-3 sm:grid-cols-2">
-              <div class="rounded-xl border border-nox-border bg-nox-card/60 p-4">
-                <h3 class="font-semibold">Что вы получите</h3>
-                <p id="product-modal-delivery" class="mt-2 text-sm leading-relaxed text-nox-muted"></p>
-              </div>
-              <div class="rounded-xl border border-nox-border bg-nox-card/60 p-4">
-                <h3 class="font-semibold">Как проходит покупка</h3>
-                <p class="mt-2 text-sm leading-relaxed text-nox-muted">
-                  После нажатия «Купить» откроется защищённая страница Oplata.info.
-                  Оплату и выдачу товара обрабатывает продавец через Digiseller.
-                </p>
+              <div id="product-modal-saving" class="hidden border-t border-emerald-500/20 bg-emerald-500/10 px-4 py-3">
+                <div id="product-modal-saving-value" class="text-base font-bold text-emerald-300"></div>
               </div>
             </div>
 
-            <div class="mt-3 rounded-xl border border-nox-border bg-black/10 p-4">
-              <h3 class="font-semibold">Важно</h3>
-              <p class="mt-2 text-sm leading-relaxed text-nox-muted">
-                ЗибСтор сравнивает предложение продавца с актуальной ценой Steam.
-                После покупки вопросы по оплате, получению и работе товара решаются напрямую с продавцом через Digiseller.
+            <div id="product-modal-seller-description" class="mt-6 rounded-xl border border-nox-border bg-nox-card/60 p-4">
+              <div class="flex flex-wrap items-baseline justify-between gap-2">
+                <h3 class="font-semibold">Описание продавца</h3>
+                <span id="product-modal-seller-name" class="text-xs text-nox-muted"></span>
+              </div>
+              <div id="product-modal-info" class="mt-3 whitespace-pre-line text-sm leading-relaxed text-nox-muted">
+                Загружаем описание лота…
+              </div>
+            </div>
+
+            <div id="product-modal-additional-wrap" class="mt-3 hidden rounded-xl border border-nox-border bg-black/10 p-4">
+              <h3 class="font-semibold">Дополнительная информация продавца</h3>
+              <div id="product-modal-additional" class="mt-3 whitespace-pre-line text-sm leading-relaxed text-nox-muted"></div>
+            </div>
+
+            <div class="mt-3 rounded-lg border border-nox-border/80 bg-black/10 px-3 py-2.5">
+              <p class="text-[11px] leading-relaxed text-nox-muted">
+                ЗибСтор сравнивает цену. Оплату, выдачу и поддержку товара осуществляет продавец через Digiseller.
               </p>
             </div>
 
@@ -276,6 +274,7 @@
 
   // Product detail data populated by the same Steam comparison calls used in the cards.
   const steamProductCache = new Map();
+  const digisellerDetailsCache = new Map();
   let openedProductId = null;
 
 
@@ -710,7 +709,15 @@
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (data.retval && Number(data.retval) !== 0) throw new Error(data.retdesc || 'Digiseller API error');
-    return data.product || [];
+
+    const category = state.categoriesList.find(c => String(c.id) === String(categoryId));
+    const categoryName = String(category?.name || '');
+
+    return (data.product || []).map(product => ({
+      ...product,
+      _categoryId: categoryId,
+      _categoryName: categoryName
+    }));
   }
 
   async function fetchAllProducts() {
@@ -905,41 +912,52 @@
   }
 
 
-  function inferDeliveryType(name) {
-    const text = String(name || '');
-    if (/(?:steam\s*gift|\bgift\b|гифт|автодоставк|steam\s*auto)/i.test(text)) {
-      return {
-        key: 'gift',
-        badge: 'Steam Gift',
-        description: 'Гифт будет отправлен напрямую в Steam согласно условиям продавца. Перед оплатой проверьте требования к региону и получению подарка на странице товара.'
-      };
+  function inferDeliveryType(product) {
+    const category = String(product?._categoryName || '').toLowerCase();
+    const name = String(product?.name || '');
+
+    if (/гифт|gift/.test(category)) {
+      return { key: 'gift', badge: 'Steam Gift' };
+    }
+    if (/ключ|key/.test(category)) {
+      return { key: 'key', badge: 'Steam Key' };
     }
 
-    if (/(?:\bkey\b|ключ)/i.test(text)) {
-      return {
-        key: 'key',
-        badge: 'Steam Key',
-        description: 'Ключ обычно выдаётся после оплаты на странице Digiseller и может быть продублирован на электронную почту. Активируйте его в клиенте Steam.'
-      };
+    // Fallback only when category metadata is unavailable.
+    if (/(?:steam\s*gift|\bgift\b|гифт|автодоставк|steam\s*auto)/i.test(name)) {
+      return { key: 'gift', badge: 'Steam Gift' };
+    }
+    if (/(?:\bkey\b|ключ)/i.test(name)) {
+      return { key: 'key', badge: 'Steam Key' };
     }
 
-    return {
-      key: 'steam',
-      badge: 'Steam',
-      description: 'Способ получения указан продавцом на странице оплаты. Перед покупкой проверьте тип товара и условия активации.'
-    };
+    return { key: 'steam', badge: 'Steam' };
   }
 
-  function inferRegionBadge(name) {
-    const text = String(name || '').toUpperCase();
 
-    if (/(RU|РУ).*(BY|UA|СНГ|CIS|CHГ)|(СНГ|CIS|CHГ).*(RU|РУ)/i.test(text)) {
-      return 'RU / СНГ';
+
+  async function fetchSellerProductDetails(productId) {
+    const key = String(productId || '');
+    if (digisellerDetailsCache.has(key)) return digisellerDetailsCache.get(key);
+
+    try {
+      const url = new URL('https://api.zibstore.ru/api/product-details');
+      url.searchParams.set('productId', key);
+      const res = await fetch(url.toString(), { cache: 'no-store' });
+      const data = await res.json();
+
+      if (!res.ok || !data?.ok || !data?.product) {
+        throw new Error(data?.error || `HTTP ${res.status}`);
+      }
+
+      digisellerDetailsCache.set(key, data.product);
+      return data.product;
+    } catch (err) {
+      console.warn('Seller product description unavailable:', key, err);
+      const empty = { info: '', addInfo: '', seller: null };
+      digisellerDetailsCache.set(key, empty);
+      return empty;
     }
-    if (/(RU|РУ|РФ)/i.test(text)) return 'RU';
-    if (/(СНГ|CIS|CHГ)/i.test(text)) return 'СНГ';
-    if (/МИР|WORLD|GLOBAL/i.test(text)) return 'Регион: по описанию';
-    return '';
   }
 
   function productBuyUrl(product, real = true) {
@@ -1001,10 +1019,16 @@
     const priceEl = document.getElementById('product-modal-steam-price');
     const regionEl = document.getElementById('product-modal-steam-region');
     const savingBox = document.getElementById('product-modal-saving');
+    const sellerNameEl = document.getElementById('product-modal-seller-name');
+    const infoEl = document.getElementById('product-modal-info');
+    const additionalWrap = document.getElementById('product-modal-additional-wrap');
+    const additionalEl = document.getElementById('product-modal-additional');
     const savingValue = document.getElementById('product-modal-saving-value');
 
     savingBox.classList.add('hidden');
     savingValue.textContent = '';
+    savingValue.className = 'text-base font-bold text-emerald-300';
+    savingBox.className = 'hidden border-t border-emerald-500/20 bg-emerald-500/10 px-4 py-3';
 
     if (!steam || !steam.available || typeof steam.final_rub !== 'number') {
       priceEl.textContent = '—';
@@ -1035,8 +1059,8 @@
       const abs = Math.round(Math.abs(diff));
       const pct = Math.round(Math.abs(diff) / ourPrice * 100);
       savingValue.textContent = `Steam дешевле на ${abs.toLocaleString('ru-RU')} ₽ (${pct}%)`;
-      savingValue.className = 'mt-1 text-lg font-bold text-amber-300';
-      savingBox.className = 'mt-3 rounded-xl border border-amber-500/25 bg-amber-500/10 p-4';
+      savingValue.className = 'text-base font-bold text-amber-300';
+      savingBox.className = 'border-t border-amber-500/20 bg-amber-500/10 px-4 py-3';
       savingBox.classList.remove('hidden');
       return;
     }
@@ -1057,25 +1081,21 @@
     const badgeEl = document.getElementById('product-modal-badges');
     const priceEl = document.getElementById('product-modal-price');
     const buyEl = document.getElementById('product-modal-buy');
-    const deliveryEl = document.getElementById('product-modal-delivery');
     const steamPriceEl = document.getElementById('product-modal-steam-price');
     const steamRegionEl = document.getElementById('product-modal-steam-region');
     const savingBox = document.getElementById('product-modal-saving');
 
     const target = getSteamTarget(product);
-    const delivery = inferDeliveryType(product.name);
-    const regionBadge = inferRegionBadge(product.name);
+    const delivery = inferDeliveryType(product);
     const editionBadge = getEditionBadge(product.name);
     const price = Number(product.price_rub ?? product.price ?? product.base_price);
 
     titleEl.textContent = product.name;
-    subtitleEl.textContent = 'Предложение проверенного продавца Digiseller. Перед оплатой ознакомьтесь с условиями конкретного лота.';
+    subtitleEl.textContent = 'Условия, описание и выдача товара определяются продавцом. Перед оплатой ознакомьтесь с информацией ниже.';
     priceEl.textContent = `${formatNum(price)} ${CURRENCY_SYMBOL}`;
-    deliveryEl.textContent = delivery.description;
 
     badgeEl.innerHTML = [
       `<span class="rounded-md border border-nox-border bg-nox-card px-2.5 py-1 text-xs text-white">${escapeHtml(delivery.badge)}</span>`,
-      regionBadge ? `<span class="rounded-md border border-amber-400/20 bg-amber-400/10 px-2.5 py-1 text-xs text-amber-300">${escapeHtml(regionBadge)}</span>` : '',
       editionBadge ? `<span class="rounded-md border border-amber-400/20 bg-black/40 px-2.5 py-1 text-xs font-bold text-amber-300">${escapeHtml(editionBadge)}</span>` : ''
     ].join('');
 
@@ -1087,10 +1107,34 @@
 
     steamPriceEl.textContent = target ? '…' : '—';
     steamRegionEl.textContent = target ? 'Проверяем актуальную цену' : 'Steam-сравнение не найдено';
-    savingBox.className = 'mt-3 hidden rounded-xl border border-emerald-500/25 bg-emerald-500/10 p-4';
-    document.getElementById('product-modal-saving-value').className = 'mt-1 text-lg font-bold text-emerald-300';
+    savingBox.className = 'hidden border-t border-emerald-500/20 bg-emerald-500/10 px-4 py-3';
+    document.getElementById('product-modal-saving-value').className = 'text-base font-bold text-emerald-300';
 
     setProductModalArtwork(product, target);
+
+    sellerNameEl.textContent = '';
+    infoEl.textContent = 'Загружаем описание лота…';
+    additionalEl.textContent = '';
+    additionalWrap.classList.add('hidden');
+
+    fetchSellerProductDetails(product.id).then(details => {
+      if (openedProductId !== String(product.id)) return;
+
+      const sellerName = String(details?.seller?.name || '').trim();
+      sellerNameEl.textContent = sellerName ? `Продавец: ${sellerName}` : '';
+
+      const info = String(details?.info || '').trim();
+      const addInfo = String(details?.addInfo || '').trim();
+
+      infoEl.textContent = info || 'Продавец не добавил отдельное описание для этого лота. Подробные условия доступны на странице Oplata.info перед оплатой.';
+
+      if (addInfo) {
+        additionalEl.textContent = addInfo;
+        additionalWrap.classList.remove('hidden');
+      } else {
+        additionalWrap.classList.add('hidden');
+      }
+    });
 
     modal.classList.remove('hidden');
     document.body.classList.add('modal-open');
