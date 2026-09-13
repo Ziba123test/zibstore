@@ -499,14 +499,14 @@
 
       const steam = await fetchSteamPrice(target);
       if (!steam || !steam.available || typeof steam.final_rub !== 'number') {
-        el.innerHTML = '';
+        el.innerHTML = `<div class="h-full flex items-center text-[10px] text-nox-muted">Цена Steam недоступна</div>`;
         return;
       }
 
       const ourPrice = Number(product.price_rub ?? product.price ?? product.base_price);
       const steamRub = Number(steam.final_rub);
       if (!Number.isFinite(ourPrice) || !Number.isFinite(steamRub) || steamRub <= 0) {
-        el.innerHTML = '';
+        el.innerHTML = `<div class="h-full flex items-center text-[10px] text-nox-muted">Цена Steam недоступна</div>`;
         return;
       }
 
@@ -519,8 +519,8 @@
       const shownOurPrice = Math.round(ourPrice).toLocaleString('ru-RU');
 
       const foundRegion = STEAM_REGION_LABELS[steam.cc] || String(steam.cc || '').toUpperCase();
-      const fallbackNote = foundRegion && foundRegion !== 'RU'
-        ? `<div class="mt-1 text-[10px] text-nox-muted">Цена Steam: ${escapeHtml(foundRegion)}${steam.currency !== 'RUB' ? ' · пересчитано в ₽' : ''}</div>`
+      const regionSuffix = foundRegion
+        ? ` · ${escapeHtml(foundRegion)}${steam.currency !== 'RUB' ? ' → ₽' : ''}`
         : '';
 
       let verdict = '';
@@ -533,10 +533,9 @@
       }
 
       el.innerHTML = `
-        <div class="min-w-0">
-          <div>${verdict}</div>
-          <div class="mt-1.5 text-[11px] text-nox-muted">Steam: ${shownSteamRub} ₽</div>
-          ${fallbackNote}
+        <div class="min-w-0 h-full flex flex-col justify-center">
+          <div class="min-h-[26px] flex items-center">${verdict}</div>
+          <div class="mt-1 text-[11px] text-nox-muted whitespace-nowrap">Steam: ${shownSteamRub} ₽${regionSuffix}</div>
         </div>
       `;
 
@@ -741,16 +740,18 @@
         </div>
         <div class="p-3 flex flex-col flex-1">
           <h3 class="text-sm font-medium leading-snug line-clamp-2 flex-1">${escapeHtml(p.name)}</h3>
-          <div class="mt-2 rounded-xl border border-nox-border bg-black/10 px-3 py-2.5">
-            <div class="min-w-0">
+          <div class="mt-2 h-[132px] rounded-xl border border-nox-border bg-black/10 px-3 py-2.5">
+            <div class="min-w-0 h-full flex flex-col">
               <div class="text-[10px] uppercase tracking-wide text-nox-muted">Цена у нас</div>
               <div class="mt-0.5 font-display text-xl font-bold text-nox-accent">${formatNum(price)} ${CURRENCY_SYMBOL}</div>
-              ${oldPrice ? `<div class="mt-0.5 text-[11px] text-nox-muted line-through">${formatNum(oldPrice)} ${CURRENCY_SYMBOL}</div>` : ''}
+              <div class="h-4 mt-0.5 text-[11px] text-nox-muted line-through">
+                ${oldPrice ? `${formatNum(oldPrice)} ${CURRENCY_SYMBOL}` : '&nbsp;'}
+              </div>
               ${real ? `
-                <div id="steam-cmp-${p.id}" class="mt-2 border-t border-nox-border pt-2">
+                <div id="steam-cmp-${p.id}" class="mt-auto min-h-[54px] border-t border-nox-border pt-2">
                   <div class="text-[10px] text-nox-muted">Проверяем цену Steam…</div>
                 </div>
-              ` : ''}
+              ` : '<div class="mt-auto min-h-[54px]"></div>'}
             </div>
           </div>
           <a href="${buyUrl}" target="_blank" rel="noopener"
