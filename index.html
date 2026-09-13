@@ -233,7 +233,7 @@
                 </button>
                 <button id="product-tab-reviews" type="button"
                   class="border-b-2 border-transparent px-4 py-3 text-sm font-semibold text-nox-muted hover:text-white">
-                  Отзывы <span id="product-reviews-count" class="ml-1 text-xs"></span>
+                  Отзывы покупателей <span id="product-reviews-count" class="ml-1 text-xs"></span>
                 </button>
                 <div class="ml-auto self-center pr-4">
                   <span id="product-modal-seller-name" class="text-xs text-nox-muted"></span>
@@ -1029,10 +1029,10 @@
 
     summary.innerHTML = total
       ? `<span class="text-emerald-300">Положительных: ${good}</span><span class="mx-2">·</span><span class="${bad > 0 ? 'text-rose-300' : ''}">Отрицательных: ${bad}</span>`
-      : 'У этого лота пока нет отзывов.';
+      : 'Текстовых отзывов покупателей для этого лота пока нет.';
 
     if (!reviews.length) {
-      list.innerHTML = '<div class="text-sm text-nox-muted">Отзывов пока нет.</div>';
+      list.innerHTML = '<div class="text-sm text-nox-muted">Текстовых отзывов покупателей пока нет.</div>';
       return;
     }
 
