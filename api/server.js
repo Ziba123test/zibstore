@@ -612,29 +612,36 @@ function htmlAttrValue(tag, name) {
 
 function parsePlatiPublicReviews(html) {
   const source = String(html || '');
-  const listItems = source.match(/<li\b[\s\S]*?<\/li>/gi) || [];
   const reviews = [];
 
-  for (const block of listItems) {
-    const bodyMatch = block.match(
-      /(<div\b[^>]*\bclass=["'][^"']*\bdigi-er-body\b[^"']*["'][^>]*>)([\s\S]*?)<\/div>/i
-    );
-    if (!bodyMatch) continue;
+  // Do not depend on <li> wrappers. Plati returns the actual review text
+  // in div.digi-er-body, and wrapper markup may vary.
+  const bodyRe =
+    /<div\b([^>]*\bclass=["'][^"']*\bdigi-er-body\b[^"']*["'][^>]*)>([\s\S]*?)<\/div>/gi;
 
-    const info = sellerText(bodyMatch[2], 4000);
+  let match;
+  while ((match = bodyRe.exec(source))) {
+    const attrs = match[1] || '';
+    const info = sellerText(match[2], 4000);
     if (!info) continue;
 
-    const bodyTag = bodyMatch[1];
-    const id = htmlAttrValue(bodyTag, 'data-tr-id');
+    const id = htmlAttrValue(attrs, 'data-tr-id');
 
-    const dateMatch =
-      block.match(/<p\b[^>]*\bclass=["'][^"']*\bfootnote-regular\b[^"']*["'][^>]*>([\s\S]*?)<\/p>/i);
-    const date = dateMatch ? sellerText(dateMatch[1], 500) : '';
+    // Date sits shortly before the review body. Search only the local prefix
+    // so we don't accidentally attach a date from a different review.
+    const prefix = source.slice(Math.max(0, match.index - 1600), match.index);
+    const dateMatches = [...prefix.matchAll(
+      /<span\b[^>]*\bclass=["'][^"']*\bfootnote-regular\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/gi
+    )];
+    const lastDate = dateMatches.length ? dateMatches[dateMatches.length - 1][1] : '';
+    const date = sellerText(lastDate, 500);
 
+    // The icon for a negative review is different from the normal thumb-up.
+    const localBlock = source.slice(Math.max(0, match.index - 1200), match.index + match[0].length + 300);
     const isNegative =
-      /#thumb-down\b/i.test(block) ||
-      /\bthumb-down\b/i.test(block) ||
-      /\bicon-error\b/i.test(block);
+      /#thumb-down\b/i.test(localBlock) ||
+      /\bthumb-down\b/i.test(localBlock) ||
+      /\bicon-error\b/i.test(localBlock);
 
     reviews.push({
       id: String(id || ''),
@@ -647,6 +654,24 @@ function parsePlatiPublicReviews(html) {
   }
 
   return reviews;
+}
+
+function collectSetCookies(headers) {
+  if (!headers) return [];
+
+  if (typeof headers.getSetCookie === 'function') {
+    return headers.getSetCookie();
+  }
+
+  const value = headers.get('set-cookie');
+  return value ? [value] : [];
+}
+
+function cookieHeaderFromSetCookies(setCookies) {
+  return (setCookies || [])
+    .map(value => String(value || '').split(';', 1)[0].trim())
+    .filter(Boolean)
+    .join('; ');
 }
 
 async function getPlatiPublicReviews({
@@ -667,30 +692,79 @@ async function getPlatiPublicReviews({
     lang: 'ru-RU'
   });
 
-  const url = `https://plati.market/asp/block_responses2.asp?${qs.toString()}`;
+  const reviewsUrl = `https://plati.market/asp/block_responses2.asp?${qs.toString()}`;
+  const pageUrl = String(productUrl || '').startsWith('http')
+    ? String(productUrl)
+    : `https://plati.market/itm/${encodeURIComponent(productId)}`;
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 12000);
+  const timer = setTimeout(() => controller.abort(), 15000);
+
+  const commonHeaders = {
+    'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131 Safari/537.36'
+  };
 
   try {
-    const res = await fetch(url, {
+    // Plati's browser first opens the product page and receives visitor/session
+    // cookies. A direct standalone request to block_responses2.asp can return
+    // HTTP 200 with an empty review fragment.
+    let cookieHeader = '';
+
+    try {
+      const pageResponse = await fetch(pageUrl, {
+        signal: controller.signal,
+        redirect: 'follow',
+        headers: {
+          ...commonHeaders,
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+        }
+      });
+
+      cookieHeader = cookieHeaderFromSetCookies(
+        collectSetCookies(pageResponse.headers)
+      );
+
+      // Consume body so the connection can be reused cleanly.
+      await pageResponse.arrayBuffer();
+    } catch (_) {
+      // Reviews request below may still work without the bootstrap cookies.
+    }
+
+    const reviewHeaders = {
+      ...commonHeaders,
+      'Accept': 'text/html, */*; q=0.01',
+      'X-Requested-With': 'XMLHttpRequest',
+      'Referer': pageUrl,
+      'Sec-Fetch-Dest': 'empty',
+      'Sec-Fetch-Mode': 'cors',
+      'Sec-Fetch-Site': 'same-origin'
+    };
+
+    if (cookieHeader) reviewHeaders.Cookie = cookieHeader;
+
+    const response = await fetch(reviewsUrl, {
       signal: controller.signal,
       redirect: 'follow',
-      headers: {
-        'Accept': 'text/html, */*; q=0.01',
-        'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
-        'X-Requested-With': 'XMLHttpRequest',
-        'Referer': String(productUrl || `https://plati.market/itm/${productId}`)
-      }
+      headers: reviewHeaders
     });
 
-    if (!res.ok) throw new Error(`Plati reviews HTTP ${res.status}`);
+    if (!response.ok) {
+      throw new Error(`Plati reviews HTTP ${response.status}`);
+    }
 
-    const html = await res.text();
+    const html = await response.text();
+    const reviews = parsePlatiPublicReviews(html);
+
     return {
-      url,
-      reviews: parsePlatiPublicReviews(html)
+      url: reviewsUrl,
+      reviews,
+      diagnostics: {
+        bytes: Buffer.byteLength(html, 'utf8'),
+        hasReviewBody: /\bdigi-er-body\b/i.test(html),
+        hasListItem: /<li\b/i.test(html),
+        cookieBootstrap: Boolean(cookieHeader)
+      }
     };
   } finally {
     clearTimeout(timer);
@@ -1616,7 +1690,8 @@ const server = http.createServer(async (req, res) => {
         totalGood: statsGood || reviews.filter(r => r.type === 'good').length,
         totalBad: statsBad || reviews.filter(r => r.type === 'bad').length,
         textItems: reviews.length,
-        reviews: reviews.slice(0, rows)
+        reviews: reviews.slice(0, rows),
+        diagnostics: publicResult.diagnostics
       });
     } catch (err) {
       return json(res, 502, {
