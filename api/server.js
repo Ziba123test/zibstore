@@ -605,84 +605,96 @@ async function getDigisellerProductDetails(productId) {
 }
 
 
-function xmlEscape(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
+function htmlAttrValue(tag, name) {
+  const re = new RegExp(`${name}\\s*=\\s*["']([^"']*)["']`, 'i');
+  return String(tag || '').match(re)?.[1] || '';
 }
 
-function xmlTagText(xml, tag) {
-  const match = String(xml || '').match(
-    new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, 'i')
-  );
-  return match ? decodeBasicHtmlEntities(match[1].trim()) : '';
-}
+function parsePlatiPublicReviews(html) {
+  const source = String(html || '');
+  const listItems = source.match(/<li\b[\s\S]*?<\/li>/gi) || [];
+  const reviews = [];
 
-function parsePlatiReviewRows(xml) {
-  const rows = [];
-  const source = String(xml || '');
-  const rowRe = /<row\b[^>]*>([\s\S]*?)<\/row>/gi;
-  let match;
+  for (const block of listItems) {
+    const bodyMatch = block.match(
+      /(<div\b[^>]*\bclass=["'][^"']*\bdigi-er-body\b[^"']*["'][^>]*>)([\s\S]*?)<\/div>/i
+    );
+    if (!bodyMatch) continue;
 
-  while ((match = rowRe.exec(source))) {
-    const block = match[1];
-    rows.push({
-      type: xmlTagText(block, 'type_response'),
-      date: xmlTagText(block, 'date_response'),
-      info: sellerText(xmlTagText(block, 'text_response'), 4000),
-      comment: sellerText(xmlTagText(block, 'comment'), 4000)
+    const info = sellerText(bodyMatch[2], 4000);
+    if (!info) continue;
+
+    const bodyTag = bodyMatch[1];
+    const id = htmlAttrValue(bodyTag, 'data-tr-id');
+
+    const dateMatch =
+      block.match(/<p\b[^>]*\bclass=["'][^"']*\bfootnote-regular\b[^"']*["'][^>]*>([\s\S]*?)<\/p>/i);
+    const date = dateMatch ? sellerText(dateMatch[1], 500) : '';
+
+    const isNegative =
+      /#thumb-down\b/i.test(block) ||
+      /\bthumb-down\b/i.test(block) ||
+      /\bicon-error\b/i.test(block);
+
+    reviews.push({
+      id: String(id || ''),
+      type: isNegative ? 'bad' : 'good',
+      good: isNegative ? 0 : 1,
+      date,
+      info,
+      comment: ''
     });
   }
 
-  return rows;
+  return reviews;
 }
 
-async function getPlatiAffiliateReviews({ guidAgent, sellerId, productId, page = 1, rows = 30 }) {
-  const body = `<?xml version="1.0" encoding="utf-8"?>
-<digiseller.request>
-  <guid_agent>${xmlEscape(guidAgent)}</guid_agent>
-  <lang>ru-RU</lang>
-  <id_seller>${xmlEscape(sellerId)}</id_seller>
-  <id_good>${xmlEscape(productId)}</id_good>
-  <type_response></type_response>
-  <page>${xmlEscape(page)}</page>
-  <rows>${xmlEscape(rows)}</rows>
-</digiseller.request>`;
-
-  const response = await fetch('https://plati.io/xml/responses.asp', {
-    method: 'POST',
-    headers: {
-      'Accept': 'application/xml,text/xml,*/*',
-      'Content-Type': 'application/xml; charset=utf-8',
-      'User-Agent': 'ZibStore/1.0'
-    },
-    body
+async function getPlatiPublicReviews({
+  productId,
+  sellerId,
+  page = 1,
+  rows = 20,
+  productUrl = ''
+}) {
+  const qs = new URLSearchParams({
+    id_d: String(productId),
+    id_s: String(sellerId),
+    mode: '0',
+    page: String(page),
+    rows: String(rows),
+    cat: 'pins',
+    ord: '1',
+    lang: 'ru-RU'
   });
 
-  if (!response.ok) {
-    throw new Error(`Plati reviews HTTP ${response.status}`);
+  const url = `https://plati.market/asp/block_responses2.asp?${qs.toString()}`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      redirect: 'follow',
+      headers: {
+        'Accept': 'text/html, */*; q=0.01',
+        'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Referer': String(productUrl || `https://plati.market/itm/${productId}`)
+      }
+    });
+
+    if (!res.ok) throw new Error(`Plati reviews HTTP ${res.status}`);
+
+    const html = await res.text();
+    return {
+      url,
+      reviews: parsePlatiPublicReviews(html)
+    };
+  } finally {
+    clearTimeout(timer);
   }
-
-  const xml = await response.text();
-  const retval = Number(xmlTagText(xml, 'retval') || 0);
-  const retdesc = xmlTagText(xml, 'retdesc');
-
-  if (retval !== 0) {
-    throw new Error(retdesc || `Plati reviews retval ${retval}`);
-  }
-
-  const parsedRows = parsePlatiReviewRows(xml);
-  const totalItems = Number(xmlTagText(xml, 'cnt_responses') || parsedRows.length);
-  const totalPages = Number(xmlTagText(xml, 'pages') || 1);
-
-  return {
-    totalItems,
-    totalPages,
-    reviews: parsedRows
-  };
 }
 
 async function getAppPrice(appid, cc) {
@@ -1543,8 +1555,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/product-reviews' && req.method === 'GET') {
     const productId = String(url.searchParams.get('productId') || '').trim();
     const page = Math.max(1, Number(url.searchParams.get('page') || 1));
-    const rows = Math.min(100, Math.max(1, Number(url.searchParams.get('rows') || 30)));
-    const guidAgent = String(process.env.PLATI_GUID_AGENT || '').trim();
+    const rows = Math.min(50, Math.max(1, Number(url.searchParams.get('rows') || 20)));
 
     if (!/^\d+$/.test(productId)) {
       return json(res, 400, { ok: false, error: 'Valid productId is required' });
@@ -1558,52 +1569,54 @@ const server = http.createServer(async (req, res) => {
         return json(res, 404, { ok: false, error: 'Seller ID is unavailable for this product' });
       }
 
-      // Keep official aggregate statistics even if affiliate review API is not configured.
       const statsGood = Math.max(0, Number(product?.statistics?.goodReviews || 0));
       const statsBad = Math.max(0, Number(product?.statistics?.badReviews || 0));
+      const statsTotal = statsGood + statsBad;
 
-      if (!guidAgent) {
-        return json(res, 200, {
-          ok: true,
-          configured: false,
+      let publicResult;
+      try {
+        publicResult = await getPlatiPublicReviews({
           productId,
           sellerId,
-          totalItems: statsGood + statsBad,
+          page,
+          rows,
+          productUrl: product?.productUrl || ''
+        });
+      } catch (err) {
+        return json(res, 200, {
+          ok: true,
+          source: 'digiseller-statistics',
+          productId,
+          sellerId,
+          totalItems: statsTotal,
           totalGood: statsGood,
           totalBad: statsBad,
           textItems: 0,
           reviews: [],
-          error: 'PLATI_GUID_AGENT is not configured'
+          publicReviewsError: err.message
         });
       }
 
-      const plati = await getPlatiAffiliateReviews({
-        guidAgent,
-        sellerId,
-        productId,
-        page,
-        rows
-      });
+      const seen = new Set();
+      const reviews = [];
 
-      const reviews = (plati.reviews || []).filter(review =>
-        String(review.info || '').trim() || String(review.comment || '').trim()
-      );
-
-      const textGood = reviews.filter(r => String(r.type || '').toLowerCase() === 'good').length;
-      const textBad = reviews.filter(r => String(r.type || '').toLowerCase() === 'bad').length;
+      for (const review of publicResult.reviews || []) {
+        const key = `${review.id}:${review.date}:${review.info}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        reviews.push(review);
+      }
 
       return json(res, 200, {
         ok: true,
-        configured: true,
-        source: 'plati-affiliate-xml',
+        source: 'plati-public-html',
         productId,
         sellerId,
-        totalPages: plati.totalPages,
-        totalItems: Math.max(plati.totalItems, statsGood + statsBad),
-        totalGood: statsGood || textGood,
-        totalBad: statsBad || textBad,
+        totalItems: statsTotal || reviews.length,
+        totalGood: statsGood || reviews.filter(r => r.type === 'good').length,
+        totalBad: statsBad || reviews.filter(r => r.type === 'bad').length,
         textItems: reviews.length,
-        reviews
+        reviews: reviews.slice(0, rows)
       });
     } catch (err) {
       return json(res, 502, {
