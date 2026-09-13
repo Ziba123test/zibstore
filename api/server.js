@@ -593,6 +593,7 @@ async function getDigisellerProductDetails(productId) {
     releaseDate: String(p.release_date || ''),
     productUrl: String(p.url || ''),
     collection: String(p.collection || ''),
+    ownerId: Number.isFinite(Number(p.owner_id)) ? Number(p.owner_id) : null,
     isAvailable: Number(p.is_available ?? 1),
     statistics: p.statistics ? {
       sales: Number(p.statistics.sales),
@@ -1461,7 +1462,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/product-reviews' && req.method === 'GET') {
     const productId = String(url.searchParams.get('productId') || '').trim();
     const page = Math.max(1, Number(url.searchParams.get('page') || 1));
-    const rows = Math.min(30, Math.max(1, Number(url.searchParams.get('rows') || 12)));
+    const rows = Math.min(50, Math.max(1, Number(url.searchParams.get('rows') || 20)));
 
     if (!/^\d+$/.test(productId)) {
       return json(res, 400, { ok: false, error: 'Valid productId is required' });
@@ -1475,20 +1476,31 @@ const server = http.createServer(async (req, res) => {
         return json(res, 404, { ok: false, error: 'Seller ID is unavailable for this product' });
       }
 
-      // Reviews in Digiseller are separated by marketplace owner_id.
-      // 1 = Plati.market, 0 = seller's own shop, 1271 = GGsel, 9295 = WMCenter.
-      // Product statistics may show review totals even when a request without
-      // owner_id returns no review rows, so query the real marketplaces explicitly.
-      const ownerIds = [1, 0, 1271, 9295];
-      const ownerResults = [];
+      // Use the marketplace owner_id from the product itself first.
+      // Then try the API without owner_id (Digiseller can resolve the current marketplace),
+      // and finally the documented marketplace IDs as fallbacks.
+      const documentedOwnerIds = [0, 1, 1271, 9295];
+      const productOwnerId = Number.isFinite(Number(product?.ownerId)) ? Number(product.ownerId) : null;
 
-      for (const ownerId of ownerIds) {
+      const attempts = [];
+      if (productOwnerId !== null) attempts.push(productOwnerId);
+      attempts.push(null);
+      for (const ownerId of documentedOwnerIds) {
+        if (!attempts.includes(ownerId)) attempts.push(ownerId);
+      }
+
+      const sourceResults = [];
+
+      for (const ownerId of attempts) {
         try {
-          const reviewsUrl =
+          let reviewsUrl =
             `${DIGISELLER_API_BASE}/reviews?seller_id=${encodeURIComponent(sellerId)}` +
             `&product_id=${encodeURIComponent(productId)}` +
-            `&type=all&owner_id=${ownerId}` +
-            `&page=${page}&rows=${rows}&lang=ru-RU`;
+            `&type=all&page=${page}&rows=${rows}&lang=ru-RU`;
+
+          if (ownerId !== null) {
+            reviewsUrl += `&owner_id=${encodeURIComponent(ownerId)}`;
+          }
 
           const data = await fetchJson(reviewsUrl);
           if (Number(data?.retval || 0) !== 0) continue;
@@ -1496,7 +1508,9 @@ const server = http.createServer(async (req, res) => {
           const reviews = (Array.isArray(data?.reviews) ? data.reviews : []).map(review => ({
             id: String(review?.id || ''),
             invoiceId: String(review?.invoice_id || ''),
-            ownerId: Number(review?.owner_id ?? ownerId),
+            ownerId: Number.isFinite(Number(review?.owner_id))
+              ? Number(review.owner_id)
+              : ownerId,
             type: String(review?.type || ''),
             good: Number(review?.good || 0),
             date: String(review?.date || ''),
@@ -1504,8 +1518,8 @@ const server = http.createServer(async (req, res) => {
             comment: sellerText(review?.comment || '', 4000)
           }));
 
-          ownerResults.push({
-            ownerId,
+          sourceResults.push({
+            requestedOwnerId: ownerId,
             totalPages: Number(data?.totalPages || 0),
             totalItems: Number(data?.totalItems || 0),
             totalGood: Number(data?.totalGood || 0),
@@ -1515,44 +1529,58 @@ const server = http.createServer(async (req, res) => {
         } catch (_) {}
       }
 
-      // Prefer actual review rows over aggregate counters.
-      // Aggregate all marketplaces and deduplicate by marketplace + review ID.
+      // Deduplicate review rows gathered from the same marketplace through
+      // both "owner_id omitted" and explicit owner_id requests.
       const seen = new Set();
-      const reviews = [];
-      for (const result of ownerResults) {
+      const allRows = [];
+
+      for (const result of sourceResults) {
         for (const review of result.reviews) {
-          const key = `${review.ownerId}:${review.id || review.invoiceId}:${review.date}:${review.info}`;
+          const key =
+            `${review.ownerId ?? 'none'}:${review.id || review.invoiceId}:` +
+            `${review.date}:${review.info}:${review.comment}`;
           if (seen.has(key)) continue;
           seen.add(key);
-          reviews.push(review);
+          allRows.push(review);
         }
       }
 
-      // Keep only rows that actually contain review text or seller response.
-      const textReviews = reviews.filter(review =>
+      const textReviews = allRows.filter(review =>
         String(review.info || '').trim() || String(review.comment || '').trim()
       );
 
-      // The tab should describe the reviews we can really show, not a hidden
-      // aggregate count from product.statistics.
-      const totalGood = textReviews.filter(review =>
-        review.type === 'good' || Number(review.good) === 1
-      ).length;
-      const totalBad = textReviews.filter(review =>
-        review.type === 'bad' || (review.type && review.type !== 'good')
-      ).length;
+      // Official aggregate statistics remain useful even when a marketplace
+      // does not expose the review text through the public endpoint.
+      const statsGood = Number(product?.statistics?.goodReviews);
+      const statsBad = Number(product?.statistics?.badReviews);
+      const aggregateGood = Number.isFinite(statsGood) && statsGood >= 0
+        ? statsGood
+        : Math.max(0, ...sourceResults.map(x => x.totalGood));
+      const aggregateBad = Number.isFinite(statsBad) && statsBad >= 0
+        ? statsBad
+        : Math.max(0, ...sourceResults.map(x => x.totalBad));
+      const aggregateTotal = aggregateGood + aggregateBad;
 
       return json(res, 200, {
         ok: true,
         productId,
         sellerId,
-        totalPages: Math.max(0, ...ownerResults.map(x => x.totalPages)),
-        totalItems: textReviews.length,
-        totalGood,
-        totalBad,
+        productOwnerId,
+        totalItems: aggregateTotal,
+        totalGood: aggregateGood,
+        totalBad: aggregateBad,
+        textItems: textReviews.length,
         reviews: textReviews.slice(0, rows),
-        marketplacesChecked: ownerIds,
-        marketplacesWithText: [...new Set(textReviews.map(x => x.ownerId))]
+        sources: sourceResults.map(x => ({
+          requestedOwnerId: x.requestedOwnerId,
+          totalItems: x.totalItems,
+          totalGood: x.totalGood,
+          totalBad: x.totalBad,
+          returnedRows: x.reviews.length,
+          returnedTextRows: x.reviews.filter(r =>
+            String(r.info || '').trim() || String(r.comment || '').trim()
+          ).length
+        }))
       });
     } catch (err) {
       return json(res, 502, { ok: false, error: err.message });
