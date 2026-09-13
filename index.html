@@ -258,37 +258,41 @@
               <div id="product-tab-panel-reviews" class="hidden p-4">
                 <div id="product-reviews-summary" class="mb-3 text-sm text-nox-muted"></div>
 
-                <div id="product-reviews-controls" class="mb-3 hidden flex flex-wrap items-center gap-2">
-                  <button type="button" data-review-filter="all"
-                    class="review-filter rounded-lg border border-nox-accent/50 bg-nox-accent/10 px-3 py-1.5 text-xs font-semibold text-white">
-                    Все <span id="review-filter-all-count"></span>
-                  </button>
-                  <button type="button" data-review-filter="good"
-                    class="review-filter rounded-lg border border-nox-border bg-black/10 px-3 py-1.5 text-xs font-semibold text-nox-muted transition hover:text-white">
-                    ✓ Положительные <span id="review-filter-good-count"></span>
-                  </button>
-                  <button type="button" data-review-filter="bad"
-                    class="review-filter rounded-lg border border-nox-border bg-black/10 px-3 py-1.5 text-xs font-semibold text-nox-muted transition hover:text-white">
-                    ! Отрицательные <span id="review-filter-bad-count"></span>
-                  </button>
+                <div id="product-reviews-controls" class="mb-3 hidden">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <button type="button" data-review-filter="all"
+                      class="review-filter rounded-lg border border-nox-accent/50 bg-nox-accent/10 px-3 py-1.5 text-xs font-semibold text-white">
+                      Все <span id="review-filter-all-count"></span>
+                    </button>
+                    <button type="button" data-review-filter="good"
+                      class="review-filter rounded-lg border border-nox-border bg-black/10 px-3 py-1.5 text-xs font-semibold text-nox-muted transition hover:text-white">
+                      ✓ Положительные <span id="review-filter-good-count"></span>
+                    </button>
+                    <button type="button" data-review-filter="bad"
+                      class="review-filter rounded-lg border border-nox-border bg-black/10 px-3 py-1.5 text-xs font-semibold text-nox-muted transition hover:text-white">
+                      ! Отрицательные <span id="review-filter-bad-count"></span>
+                    </button>
 
-                  <select id="product-reviews-sort"
-                    class="ml-auto rounded-lg border border-nox-border bg-nox-card px-3 py-1.5 text-xs text-white outline-none">
-                    <option value="newest">Сначала новые</option>
-                    <option value="oldest">Сначала старые</option>
-                  </select>
+                    <select id="product-reviews-sort"
+                      class="ml-auto rounded-lg border border-nox-border bg-nox-card px-3 py-1.5 text-xs text-white outline-none">
+                      <option value="newest">Сначала новые</option>
+                      <option value="oldest">Сначала старые</option>
+                    </select>
+                  </div>
 
-                  <button id="product-reviews-more" type="button"
-                    class="hidden rounded-lg border border-nox-border bg-black/10 px-3 py-1.5 text-xs font-semibold text-white transition hover:border-nox-accent/60 hover:text-nox-accent">
-                    Ещё 5
-                  </button>
-                  <button id="product-reviews-collapse" type="button"
-                    class="hidden rounded-lg border border-nox-border bg-black/10 px-3 py-1.5 text-xs font-semibold text-nox-muted transition hover:text-white">
-                    Свернуть
-                  </button>
+                  <div class="mt-2 flex flex-wrap items-center gap-2">
+                    <button id="product-reviews-more" type="button"
+                      class="hidden rounded-lg border border-nox-border bg-black/10 px-3 py-1.5 text-xs font-semibold text-white transition hover:border-nox-accent/60 hover:text-nox-accent">
+                      Ещё 5
+                    </button>
+                    <button id="product-reviews-collapse" type="button"
+                      class="hidden rounded-lg border border-nox-border bg-black/10 px-3 py-1.5 text-xs font-semibold text-nox-muted transition hover:text-white">
+                      Свернуть
+                    </button>
+                  </div>
                 </div>
 
-                <div id="product-reviews-list" class="space-y-2 overflow-x-hidden">
+                <div id="product-reviews-list" class="max-h-[42vh] space-y-2 overflow-y-auto overflow-x-hidden pr-2">
                   <div class="text-sm text-nox-muted">Отзывы будут загружены при открытии вкладки.</div>
                 </div>
 
