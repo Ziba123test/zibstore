@@ -525,6 +525,84 @@ async function runAutomaticMatchSync(force = false) {
   return autoMatchSyncPromise;
 }
 
+
+function decodeBasicHtmlEntities(value) {
+  return String(value || '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&#(\d+);/g, (_, n) => {
+      const code = Number(n);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : _;
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => {
+      const code = parseInt(n, 16);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : _;
+    });
+}
+
+function sellerText(value, maxLength = 14000) {
+  let text = String(value || '');
+  if (!text) return '';
+
+  text = text
+    .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+    .replace(/<\/\s*(?:p|div|li|h[1-6]|tr)\s*>/gi, '\n')
+    .replace(/<\s*li\b[^>]*>/gi, '• ')
+    .replace(/<[^>]+>/g, ' ');
+
+  text = decodeBasicHtmlEntities(text)
+    .replace(/\r/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  return text.slice(0, maxLength);
+}
+
+async function getDigisellerProductDetails(productId) {
+  const id = String(productId || '').trim();
+  if (!/^\d+$/.test(id)) throw new Error('Invalid productId');
+
+  // Do not pass seller_id here: Digiseller can then return the actual product
+  // seller name. Category comes from our storefront catalog separately.
+  const url =
+    `${DIGISELLER_API_BASE}/products/${encodeURIComponent(id)}/data` +
+    `?currency=RUB&lang=ru-RU&format=json&cache=1`;
+
+  const data = await fetchJson(url);
+  if (Number(data?.retval || 0) !== 0 || !data?.product) {
+    throw new Error(data?.retdesc || 'Digiseller product details unavailable');
+  }
+
+  const p = data.product;
+  return {
+    id: String(p.id || id),
+    name: String(p.name || ''),
+    info: sellerText(p.info),
+    addInfo: sellerText(p.add_info),
+    seller: p.seller ? {
+      id: p.seller.id ? String(p.seller.id) : '',
+      name: String(p.seller.name || '')
+    } : null,
+    releaseDate: String(p.release_date || ''),
+    productUrl: String(p.url || ''),
+    collection: String(p.collection || ''),
+    isAvailable: Number(p.is_available ?? 1),
+    statistics: p.statistics ? {
+      sales: Number(p.statistics.sales),
+      refunds: Number(p.statistics.refunds),
+      goodReviews: Number(p.statistics.good_reviews),
+      badReviews: Number(p.statistics.bad_reviews)
+    } : null
+  };
+}
+
 async function getAppPrice(appid, cc) {
   const data = await fetchJson(
     `https://store.steampowered.com/api/appdetails?appids=${appid}&cc=${cc}&filters=basic,price_overview`
@@ -1378,6 +1456,26 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === '/health') {
     return json(res, 200, { ok: true, service: 'zibstore-api' });
+  }
+
+  if (url.pathname === '/api/product-details' && req.method === 'GET') {
+    const productId = String(url.searchParams.get('productId') || '').trim();
+    if (!/^\d+$/.test(productId)) {
+      return json(res, 400, { ok: false, error: 'Valid productId is required' });
+    }
+
+    try {
+      const product = await getDigisellerProductDetails(productId);
+      return json(res, 200, {
+        ok: true,
+        product
+      });
+    } catch (err) {
+      return json(res, 502, {
+        ok: false,
+        error: err.message
+      });
+    }
   }
 
   if (url.pathname === '/api/steam-matches') {
