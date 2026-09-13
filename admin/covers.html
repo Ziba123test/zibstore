@@ -64,6 +64,12 @@
     .subactions input[type=file]{display:none}
     .hint{font-size:11px;color:#8e847d;margin-top:5px}
     .picker-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0 14px}
+    .sync-details{margin:12px 0 18px;display:grid;gap:10px}
+    .sync-item{background:#14110f;border:1px solid #2c2521;border-radius:14px;padding:12px}
+    .sync-item h3{margin:0 0 5px;font-size:14px}
+    .sync-candidates{display:grid;gap:7px;margin-top:10px}
+    .sync-candidate{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px;border:1px solid #332a25;border-radius:10px;background:#0f0d0c}
+    .sync-candidate small{display:block;color:#998f88}
   </style>
 </head>
 <body>
@@ -114,6 +120,7 @@
       <span id="syncStatus" class="muted"></span>
     </div>
 
+    <div id="syncDetails" class="sync-details hidden"></div>
     <div id="grid" class="grid"></div>
   </main>
 
@@ -791,6 +798,94 @@ document.querySelector('#q').addEventListener('input',render);
 document.querySelector('#filter').addEventListener('change',render);
 document.querySelector('#reload').onclick=load;
 
+function renderSyncDetails(data){
+  const box = document.querySelector('#syncDetails');
+  const unresolved = Array.isArray(data.unresolved) ? data.unresolved : [];
+  const ignored = Array.isArray(data.ignored) ? data.ignored : [];
+
+  box.innerHTML = '';
+
+  if(!unresolved.length && !ignored.length){
+    box.classList.add('hidden');
+    return;
+  }
+
+  box.classList.remove('hidden');
+
+  if(ignored.length){
+    const note = document.createElement('div');
+    note.className = 'sync-item';
+    note.innerHTML = `<h3>Игнорируются как неигровые услуги: ${ignored.length}</h3>` +
+      ignored.map(x => `<div class="muted">${escapeHtml(x.name)} · Product ID ${escapeHtml(x.productId)}</div>`).join('');
+    box.appendChild(note);
+  }
+
+  for(const item of unresolved){
+    const el = document.createElement('div');
+    el.className = 'sync-item';
+
+    const candidates = Array.isArray(item.candidates) ? item.candidates : [];
+    el.innerHTML = `
+      <h3>${escapeHtml(item.name)}</h3>
+      <div class="muted">Product ID ${escapeHtml(item.productId)}</div>
+      <div class="muted">Нормализовано: ${escapeHtml(item.normalizedName || '')}</div>
+      <div class="sync-candidates"></div>
+    `;
+
+    const list = el.querySelector('.sync-candidates');
+
+    if(!candidates.length){
+      list.innerHTML = `<div class="muted">Исторических кандидатов не найдено.</div>`;
+    }else{
+      for(const c of candidates){
+        const row = document.createElement('div');
+        row.className = 'sync-candidate';
+        row.innerHTML = `
+          <div>
+            <strong>${escapeHtml(c.knownTitle)}</strong>
+            <small>
+              Product ${escapeHtml(c.oldProductId)} → ${escapeHtml(c.type)} ${escapeHtml(c.steamId)}
+              · score ${escapeHtml(c.score)}
+              ${c.exactNormalized ? ' · точное нормализованное совпадение' : ''}
+            </small>
+          </div>
+          <button ${c.editionCompatible ? '' : 'disabled'}>Привязать</button>
+        `;
+
+        row.querySelector('button').onclick = async () => {
+          const btn = row.querySelector('button');
+          btn.disabled = true;
+          btn.textContent = 'Сохраняю…';
+
+          try{
+            const r = await apiFetch('/api/admin/apply-match-candidate',{
+              method:'POST',
+              headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({
+                productId:item.productId,
+                sourceProductId:c.oldProductId
+              })
+            });
+            const saved = await r.json();
+            if(!r.ok || !saved.ok) throw new Error(saved.error || `HTTP ${r.status}`);
+
+            btn.textContent = 'Готово';
+            await load();
+          }catch(e){
+            btn.disabled = false;
+            btn.textContent = 'Ошибка';
+            alert(e.message);
+          }
+        };
+
+        list.appendChild(row);
+      }
+    }
+
+    box.appendChild(el);
+  }
+}
+
 document.querySelector('#syncDigiseller').onclick = async () => {
   const el = document.querySelector('#syncStatus');
   el.textContent = 'Синхронизация…';
@@ -802,8 +897,10 @@ document.querySelector('#syncDigiseller').onclick = async () => {
 
     el.textContent =
       `Готово: из истории ${data.inherited || 0}, через Steam ${data.steamSearchMatched || 0}, ` +
+      `игнорируется ${Array.isArray(data.ignored) ? data.ignored.length : 0}, ` +
       `не определено ${Array.isArray(data.unresolved) ? data.unresolved.length : 0}.`;
 
+    renderSyncDetails(data);
     await load();
   }catch(e){
     if(e.message !== 'Unauthorized') el.textContent = `Ошибка: ${e.message}`;
