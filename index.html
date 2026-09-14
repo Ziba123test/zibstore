@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <!-- ZibStore frontend v43: public cover warnings hidden; admin manages covers -->
+  <!-- ZibStore v89: filter selection and DLC title recognition fixes -->
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>ЗибСтор — Ключи игр | Честное сравнение цен</title>
@@ -895,6 +895,7 @@
     catStrip.innerHTML = tabs.map(c => `
       <button
         data-cat-id="${c.id}"
+        aria-pressed="${c.id == state.categoryId}"
         class="cat-btn rounded-full px-4 py-2 font-medium transition border ${c.id == state.categoryId ? 'border-nox-accent bg-nox-accent text-nox-bg' : 'border-nox-border text-nox-muted hover:text-white hover:border-white/30'}"
       >${c.name}</button>
     `).join('');
@@ -902,7 +903,7 @@
       btn.addEventListener('click', () => {
         state.categoryId = isNaN(btn.dataset.catId) ? btn.dataset.catId : Number(btn.dataset.catId);
         state.page = 1;
-        renderContentFilter();
+        renderCategoryStrip();
         loadProducts();
       });
     });
@@ -950,7 +951,10 @@
     return merged;
   }
 
+  let productsRequestId = 0;
+
   async function loadProducts() {
+    const requestId = ++productsRequestId;
     renderSkeletons();
     bannerEl.classList.add('hidden');
 
@@ -958,10 +962,12 @@
       const products = state.categoryId === 'all'
         ? await fetchAllProducts()
         : await fetchCategoryProducts(state.categoryId);
+      if (requestId !== productsRequestId) return;
       state.rawProducts = products;
       state.isFallback = false;
       applyAndRender();
     } catch (err) {
+      if (requestId !== productsRequestId) return;
       console.warn('API Digiseller недоступен из браузера — показаны демо-данные:', err);
       showBanner('Не удалось получить каталог напрямую из браузера. Показаны демо-товары — технические детали в консоли браузера (F12).');
       state.rawProducts = FALLBACK_PRODUCTS;
@@ -1127,8 +1133,20 @@
   }
 
 
+function hasDlcTitleLabel(title) {
+  const name = String(title || '').normalize('NFKC').toLowerCase();
+  // Ignore bundle wording, e.g. "Game + DLC" or "Game includes DLC".
+  // Check the title only; descriptions often mention optional add-ons.
+  const standalone = name.replace(
+    /(?:[+＋]|\b(?:includes?|including|with|and)\b|включая|включает|\sс\s)\s*(?:(?:all|все|\d+)\s+)?dlc\b/giu,
+    ' '
+  );
+  return /(?:^|[^\p{L}\p{N}_])dlc(?:$|[^\p{L}\p{N}_])/iu.test(standalone)
+    || /\bdownloadable\s+content\b/i.test(standalone);
+}
+
   function isDlcProduct(product) {
-    const category = String(product?._categoryName || '').normalize('NFKC').toLowerCase();
+    const category = String(product?._categoryName || product?.categoryName || '').normalize('NFKC').toLowerCase();
     const name = String(product?.name || '').normalize('NFKC').toLowerCase();
     const saved = serverSteamMatches[String(product?.id || '')] || {};
     const savedCategory = String(saved?.categoryName || '').normalize('NFKC').toLowerCase();
@@ -1144,7 +1162,7 @@
     // Conservative title fallback for sellers that put DLCs inside Keys/Gifts.
     // Prefix/explicit labels are safe enough; we intentionally do not classify
     // every product merely because the description mentions "includes DLC".
-    if (/^\s*dlc(?:\s|:|-)/i.test(name)) return true;
+    if (hasDlcTitleLabel(name)) return true;
     if (/(?:^|[\s([{])дополнени(?:е|я)(?:[\s)\]}:,-]|$)/iu.test(name)) return true;
     if (/(?:^|[\s([{])add[\s-]?on(?:[\s)\]}:,-]|$)/i.test(name)) return true;
     if (/(?:^|[\s([{])expansion(?:[\s)\]}:,-]|$)/i.test(name)) return true;
@@ -1182,31 +1200,13 @@
       const type = button.dataset.contentFilter || 'all';
       const active = type === state.contentFilter;
 
-      button.classList.remove(
-        'border-nox-accent', 'bg-nox-accent/10', 'text-nox-accent',
-        'border-violet-300/70', 'bg-violet-500/15', 'text-violet-100',
-        'border-white/40', 'bg-white/5', 'text-white'
+      // Replace the entire visual state so inactive colors cannot accumulate.
+      button.className = 'content-filter-btn rounded-full border px-3 py-1.5 font-medium transition ' + (
+        active
+          ? 'border-nox-accent bg-nox-accent text-nox-bg'
+          : 'border-nox-border bg-transparent text-nox-muted hover:border-white/30 hover:text-white'
       );
-
-      if (type === 'all') {
-        button.classList.add(
-          active ? 'border-nox-accent' : 'border-nox-border',
-          active ? 'bg-nox-accent/10' : 'bg-transparent',
-          active ? 'text-nox-accent' : 'text-nox-muted'
-        );
-      } else if (type === 'games') {
-        button.classList.add(
-          active ? 'border-white/40' : 'border-nox-border',
-          active ? 'bg-white/5' : 'bg-transparent',
-          active ? 'text-white' : 'text-nox-muted'
-        );
-      } else {
-        button.classList.add(
-          active ? 'border-violet-300/70' : 'border-violet-400/30',
-          active ? 'bg-violet-500/15' : 'bg-violet-500/5',
-          active ? 'text-violet-100' : 'text-violet-200'
-        );
-      }
+      button.setAttribute('aria-pressed', String(active));
     });
   }
 
