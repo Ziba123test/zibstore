@@ -105,11 +105,32 @@
       </div>
 
       <!-- Лента категорий -->
-      <div id="category-strip" class="mb-6 flex flex-wrap gap-2 text-sm">
+      <div id="category-strip" class="mb-3 flex flex-wrap gap-2 text-sm">
         <div class="skeleton h-9 w-16 rounded-full"></div>
         <div class="skeleton h-9 w-28 rounded-full"></div>
         <div class="skeleton h-9 w-28 rounded-full"></div>
         <div class="skeleton h-9 w-32 rounded-full"></div>
+      </div>
+
+      <!-- Независимый фильтр содержимого.
+           Нужен прежде всего для категорий ключей/гифтов, где продавцы смешивают
+           обычные игры и DLC. -->
+      <div id="content-filter-wrap" class="mb-6 hidden items-center gap-2 text-xs sm:text-sm">
+        <span class="mr-1 text-nox-muted">Содержимое</span>
+        <div id="content-filter-strip" class="flex flex-wrap gap-2">
+          <button type="button" data-content-filter="all"
+            class="content-filter-btn rounded-full border border-nox-accent bg-nox-accent/10 px-3 py-1.5 font-medium text-nox-accent transition">
+            Всё
+          </button>
+          <button type="button" data-content-filter="games"
+            class="content-filter-btn rounded-full border border-nox-border px-3 py-1.5 font-medium text-nox-muted transition hover:border-white/30 hover:text-white">
+            Без DLC
+          </button>
+          <button type="button" data-content-filter="dlc"
+            class="content-filter-btn rounded-full border border-violet-400/30 bg-violet-500/5 px-3 py-1.5 font-medium text-violet-200 transition hover:border-violet-300/60 hover:bg-violet-500/10">
+            Только DLC
+          </button>
+        </div>
       </div>
 
       <div id="api-banner" class="hidden mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300"></div>
@@ -338,6 +359,7 @@
 
   const state = {
     categoryId: 'all',
+    contentFilter: 'all', // all | games | dlc
     categoriesList: [],   // реальные категории с API (без псевдо-"Все")
     rawProducts: [],      // сырые товары текущей категории/подборки, как пришли с сервера
     order: 'popular',
@@ -374,6 +396,8 @@
   const emptyEl = document.getElementById('empty-state');
   const bannerEl = document.getElementById('api-banner');
   const catStrip = document.getElementById('category-strip');
+  const contentFilterWrap = document.getElementById('content-filter-wrap');
+  const contentFilterStrip = document.getElementById('content-filter-strip');
 
   // ---- Демо-данные на случай, если запрос к API не прошёл (сеть/CORS) ----
   const FALLBACK_PRODUCTS = [
@@ -388,7 +412,8 @@
     { id: 101, name: 'Ключи Steam' },
     { id: 102, name: 'Гифты Steam' },
     { id: 103, name: 'Пополнение Steam' },
-    { id: 104, name: 'Оффлайн-аккаунты Steam' }
+    { id: 104, name: 'Оффлайн-аккаунты Steam' },
+    { id: 105, name: 'Дополнения Steam' }
   ];
 
   // ---------------- Сравнение с ценой в Steam ----------------
@@ -877,9 +902,12 @@
       btn.addEventListener('click', () => {
         state.categoryId = isNaN(btn.dataset.catId) ? btn.dataset.catId : Number(btn.dataset.catId);
         state.page = 1;
+        renderContentFilter();
         loadProducts();
       });
     });
+
+    renderContentFilter();
   }
 
   // ---------------- Загрузка товаров ----------------
@@ -959,6 +987,15 @@
 
   function applyAndRender() {
     let filtered = state.rawProducts;
+
+    if (shouldShowContentFilter()) {
+      if (state.contentFilter === 'games') {
+        filtered = filtered.filter(product => !isDlcProduct(product));
+      } else if (state.contentFilter === 'dlc') {
+        filtered = filtered.filter(product => isDlcProduct(product));
+      }
+    }
+
     if (state.search) {
       const q = state.search.toLowerCase();
       filtered = filtered.filter(p => p.name.toLowerCase().includes(q));
@@ -1090,6 +1127,98 @@
   }
 
 
+  function isDlcProduct(product) {
+    const category = String(product?._categoryName || '').normalize('NFKC').toLowerCase();
+    const name = String(product?.name || '').normalize('NFKC').toLowerCase();
+    const saved = serverSteamMatches[String(product?.id || '')] || {};
+    const savedCategory = String(saved?.categoryName || '').normalize('NFKC').toLowerCase();
+
+    // Strongest signal: backend has validated the Steam App as type "dlc".
+    if (String(saved?.steamProductType || '').toLowerCase() === 'dlc') return true;
+    if (String(saved?.matchSource || '').toLowerCase() === 'steam-search-dlc') return true;
+
+    // Digiseller category itself says this is an add-on.
+    if (/дополн|(?:^|\b)dlc(?:\b|$)|add[\s-]?on|expansion/i.test(category)) return true;
+    if (/дополн|(?:^|\b)dlc(?:\b|$)|add[\s-]?on|expansion/i.test(savedCategory)) return true;
+
+    // Conservative title fallback for sellers that put DLCs inside Keys/Gifts.
+    // Prefix/explicit labels are safe enough; we intentionally do not classify
+    // every product merely because the description mentions "includes DLC".
+    if (/^\s*dlc(?:\s|:|-)/i.test(name)) return true;
+    if (/(?:^|[\s([{])дополнени(?:е|я)(?:[\s)\]}:,-]|$)/iu.test(name)) return true;
+    if (/(?:^|[\s([{])add[\s-]?on(?:[\s)\]}:,-]|$)/i.test(name)) return true;
+    if (/(?:^|[\s([{])expansion(?:[\s)\]}:,-]|$)/i.test(name)) return true;
+
+    return false;
+  }
+
+  function selectedCategoryKind() {
+    if (state.categoryId === 'all') return 'all';
+
+    const category = state.categoriesList.find(
+      c => String(c.id) === String(state.categoryId)
+    );
+    const name = String(category?.name || '').toLowerCase();
+
+    if (/пополн|wallet|balance/.test(name)) return 'topup';
+    if (/дополн|(?:^|\b)dlc(?:\b|$)|add[\s-]?on|expansion/.test(name)) return 'dlc';
+    if (/гифт|gift/.test(name)) return 'gift';
+    if (/ключ|key/.test(name)) return 'key';
+
+    return 'other';
+  }
+
+  function shouldShowContentFilter() {
+    const kind = selectedCategoryKind();
+    return kind === 'all' || kind === 'key' || kind === 'gift';
+  }
+
+  function renderContentFilter() {
+    const visible = shouldShowContentFilter();
+    contentFilterWrap.classList.toggle('hidden', !visible);
+    contentFilterWrap.classList.toggle('flex', visible);
+
+    contentFilterStrip.querySelectorAll('[data-content-filter]').forEach(button => {
+      const type = button.dataset.contentFilter || 'all';
+      const active = type === state.contentFilter;
+
+      button.classList.remove(
+        'border-nox-accent', 'bg-nox-accent/10', 'text-nox-accent',
+        'border-violet-300/70', 'bg-violet-500/15', 'text-violet-100',
+        'border-white/40', 'bg-white/5', 'text-white'
+      );
+
+      if (type === 'all') {
+        button.classList.add(
+          active ? 'border-nox-accent' : 'border-nox-border',
+          active ? 'bg-nox-accent/10' : 'bg-transparent',
+          active ? 'text-nox-accent' : 'text-nox-muted'
+        );
+      } else if (type === 'games') {
+        button.classList.add(
+          active ? 'border-white/40' : 'border-nox-border',
+          active ? 'bg-white/5' : 'bg-transparent',
+          active ? 'text-white' : 'text-nox-muted'
+        );
+      } else {
+        button.classList.add(
+          active ? 'border-violet-300/70' : 'border-violet-400/30',
+          active ? 'bg-violet-500/15' : 'bg-violet-500/5',
+          active ? 'text-violet-100' : 'text-violet-200'
+        );
+      }
+    });
+  }
+
+  contentFilterStrip.querySelectorAll('[data-content-filter]').forEach(button => {
+    button.addEventListener('click', () => {
+      state.contentFilter = button.dataset.contentFilter || 'all';
+      state.page = 1;
+      renderContentFilter();
+      applyAndRender();
+    });
+  });
+
   function inferDeliveryType(product) {
     const category = String(product?._categoryName || '').toLowerCase();
     const name = String(product?.name || '');
@@ -1118,6 +1247,7 @@
   function renderArtworkBadges(product, { modal = false } = {}) {
     const delivery = inferDeliveryType(product);
     const edition = getEditionBadge(product?.name);
+    const dlc = isDlcProduct(product);
 
     const base = modal
       ? 'px-2.5 py-1 text-[11px]'
@@ -1131,10 +1261,23 @@
           ? 'border-emerald-300/30 bg-emerald-950/85 text-emerald-100'
           : 'border-white/20 bg-black/80 text-white';
 
-    return [
+    const leftBadges = [
+      dlc ? `
+        <span class="max-w-[100%] truncate rounded-md border border-violet-300/40 bg-violet-950/85 ${base} font-black tracking-[0.10em] text-violet-100 shadow-lg backdrop-blur-sm">
+          DLC
+        </span>
+      ` : '',
       edition ? `
-        <span class="absolute left-2 top-2 max-w-[48%] truncate rounded-md border border-amber-400/40 bg-black/80 ${base} font-black tracking-[0.10em] text-amber-300 shadow-lg backdrop-blur-sm">
+        <span class="max-w-[100%] truncate rounded-md border border-amber-400/40 bg-black/80 ${base} font-black tracking-[0.10em] text-amber-300 shadow-lg backdrop-blur-sm">
           ${escapeHtml(edition)}
+        </span>
+      ` : ''
+    ].filter(Boolean).join('');
+
+    return [
+      leftBadges ? `
+        <span class="absolute left-2 top-2 flex max-w-[48%] flex-col items-start gap-1.5">
+          ${leftBadges}
         </span>
       ` : '',
       `
@@ -1144,7 +1287,6 @@
       `
     ].join('');
   }
-
 
 
   async function fetchSellerProductDetails(productId) {
