@@ -267,10 +267,55 @@ function baseTitlesEquivalent(a, b) {
   // Steam occasionally appends a non-commercial descriptor to the base app
   // while sellers keep the cleaner retail title. Treat only known-safe aliases
   // as the same base game. This is intentionally conservative.
-  const softSuffixes = ['enhanced'];
+  const softSuffixes = ['enhanced', 'remake'];
   return softSuffixes.some(suffix =>
     aa === `${bb} ${suffix}` || bb === `${aa} ${suffix}`
   );
+}
+
+
+function canonicalCommerceTitle(value) {
+  return cleanSalesTitle(value)
+    .replace(/:+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function namedPackageInfo(value) {
+  const s = canonicalCommerceTitle(value);
+  const tags = [
+    ['trilogy', /\btrilogy\b/i],
+    ['collection', /\bcollection\b/i],
+    ['anthology', /\banthology\b/i],
+    ['compilation', /\bcompilation\b/i],
+    ['franchise-pack', /\bfranchise\s+pack\b/i]
+  ];
+  const hit = tags.find(([, re]) => re.test(s));
+  return { tag: hit ? hit[0] : null };
+}
+
+function isNamedCollectionPackage(value) {
+  return Boolean(namedPackageInfo(value).tag);
+}
+
+function packageTitleSimilarity(a, b) {
+  const aa = canonicalCommerceTitle(a);
+  const bb = canonicalCommerceTitle(b);
+  if (!aa || !bb) return 0;
+  if (aa === bb) return 1;
+
+  const A = new Set(aa.split(/\s+/).filter(x => x.length > 1));
+  const B = new Set(bb.split(/\s+/).filter(x => x.length > 1));
+  if (!A.size || !B.size) return 0;
+
+  let intersection = 0;
+  for (const t of A) if (B.has(t)) intersection++;
+  const union = new Set([...A, ...B]).size;
+  const jaccard = union ? intersection / union : 0;
+  const containment = intersection / Math.min(A.size, B.size);
+  const contains = aa.includes(bb) || bb.includes(aa) ? 0.08 : 0;
+
+  return Math.min(1, (jaccard * 0.58) + (containment * 0.34) + contains);
 }
 
 function steamSearchTermVariants(value) {
@@ -582,6 +627,201 @@ async function findSteamBaseAppCandidate(product, matches = null) {
   };
 }
 
+
+async function packageIdsForAnchorApp(appId, productTitle = '') {
+  let appDetails = await getSteamAppDetails(appId, 'packages');
+  if (!appDetails) return [];
+
+  const filteredHasPackages =
+    (Array.isArray(appDetails.packages) && appDetails.packages.length) ||
+    (Array.isArray(appDetails.package_groups) && appDetails.package_groups.length);
+  if (!filteredHasPackages) {
+    appDetails = await getSteamAppDetails(appId) || appDetails;
+  }
+
+  const hints = new Map();
+  for (const group of Array.isArray(appDetails.package_groups) ? appDetails.package_groups : []) {
+    for (const sub of Array.isArray(group?.subs) ? group.subs : []) {
+      const id = String(sub?.packageid || '').trim();
+      if (!/^\d+$/.test(id)) continue;
+      hints.set(id, {
+        optionText: String(sub?.option_text || '').trim(),
+        optionDescription: String(sub?.option_description || '').trim()
+      });
+    }
+  }
+
+  const packageIds = [];
+  const pushId = id => {
+    id = String(id || '').trim();
+    if (/^\d+$/.test(id) && !packageIds.includes(id)) packageIds.push(id);
+  };
+  for (const id of Array.isArray(appDetails.packages) ? appDetails.packages : []) pushId(id);
+  for (const id of hints.keys()) pushId(id);
+
+  // Store-visible package-group labels are the strongest cheap hint. Put likely
+  // matches first so we do not need to request dozens of unrelated SubIDs.
+  packageIds.sort((a, b) => {
+    const ah = hints.get(a) || {};
+    const bh = hints.get(b) || {};
+    const at = `${ah.optionText || ''} ${ah.optionDescription || ''}`.trim();
+    const bt = `${bh.optionText || ''} ${bh.optionDescription || ''}`.trim();
+    return packageTitleSimilarity(productTitle, bt) - packageTitleSimilarity(productTitle, at);
+  });
+
+  return packageIds.map(id => ({ packageId: id, hint: hints.get(id) || {} }));
+}
+
+async function findNamedPackageAnchorApps(product, matches = null) {
+  const anchors = [];
+  const seen = new Set();
+
+  const push = (appId, name = '', score = 0, source = '') => {
+    appId = String(appId || '').trim();
+    if (!/^\d+$/.test(appId) || seen.has(appId)) return;
+    seen.add(appId);
+    anchors.push({
+      appId,
+      name: String(name || `App ${appId}`),
+      score: Number(score || 0),
+      source
+    });
+  };
+
+  // Existing verified mappings are excellent anchors for a franchise package.
+  // We do NOT auto-bind to them directly; they are used only to enumerate Steam
+  // packages, and the final package title still has to match the seller title.
+  for (const c of historicalCandidates(product, matches, 20)) {
+    if (c.type !== 'app' || Number(c.score || 0) < 0.50) continue;
+    const source = matches?.[c.oldProductId] || {};
+    push(c.steamId, source.steamSearchName || c.knownTitle, c.score, 'history');
+    if (anchors.length >= 4) break;
+  }
+
+  // If history is thin, let Steam search suggest additional apps from the same
+  // franchise. A weak anchor is safe because package acceptance below is exact.
+  const query = canonicalCommerceTitle(product?.name);
+  const searchItems = await steamStoreSearch(query);
+  for (const item of searchItems.slice(0, 12)) {
+    if (!item?.id || !item?.name) continue;
+    const score = packageTitleSimilarity(product.name, item.name);
+    if (score < 0.45) continue;
+    push(item.id, item.name, score, 'steam-search');
+    if (anchors.length >= 6) break;
+  }
+
+  return anchors;
+}
+
+async function discoverNamedPackageCandidates(product, matches = null) {
+  if (!isNamedCollectionPackage(product?.name)) return [];
+
+  const anchors = await findNamedPackageAnchorApps(product, matches);
+  if (!anchors.length) return [];
+
+  const packageMap = new Map();
+
+  for (const anchor of anchors.slice(0, 6)) {
+    const refs = await packageIdsForAnchorApp(anchor.appId, product.name);
+
+    // 24 per anchor is intentionally bounded. Exact/higher-similarity package
+    // group hints are sorted first, and duplicate SubIDs are fetched once.
+    for (const ref of refs.slice(0, 24)) {
+      const id = String(ref.packageId);
+      if (!packageMap.has(id)) {
+        packageMap.set(id, {
+          packageId: id,
+          hint: ref.hint || {},
+          anchorAppId: anchor.appId,
+          anchorName: anchor.name,
+          anchorScore: anchor.score
+        });
+      }
+    }
+  }
+
+  const refs = [...packageMap.values()].sort((a, b) => {
+    const ah = `${a.hint?.optionText || ''} ${a.hint?.optionDescription || ''}`.trim();
+    const bh = `${b.hint?.optionText || ''} ${b.hint?.optionDescription || ''}`.trim();
+    return packageTitleSimilarity(product.name, bh) - packageTitleSimilarity(product.name, ah);
+  });
+
+  const candidates = [];
+  for (const ref of refs.slice(0, 36)) {
+    const details = await getSteamPackageDetails(ref.packageId);
+    if (!details) continue;
+
+    const apps = steamPackageApps(details);
+    if (!apps.some(x => x.id === String(ref.anchorAppId))) continue;
+
+    const name = String(details.name || '').trim();
+    const hintText = String(ref.hint?.optionText || '').trim();
+    const optionDescription = String(ref.hint?.optionDescription || '').trim();
+    const comparedName = name || hintText;
+    const score = packageTitleSimilarity(product.name, comparedName);
+    const exactTitle =
+      canonicalCommerceTitle(product.name) === canonicalCommerceTitle(comparedName) ||
+      (hintText && canonicalCommerceTitle(product.name) === canonicalCommerceTitle(hintText));
+
+    const suspicious = /(?:upgrade|soundtrack|commercial\s+license|season\s+pass)/i.test(
+      `${name} ${hintText} ${optionDescription}`
+    );
+
+    candidates.push({
+      type: 'package',
+      steamId: String(ref.packageId),
+      name: name || hintText || `Package ${ref.packageId}`,
+      optionText: hintText,
+      apps,
+      coverAppId: bestPackageCoverAppId(product.name, apps, ref.anchorAppId),
+      anchorAppId: String(ref.anchorAppId),
+      anchorName: String(ref.anchorName || ''),
+      exactTitle,
+      // Reuse the existing admin-card recommendation styling.
+      editionMatch: exactTitle,
+      exactBase: exactTitle,
+      suspicious,
+      score: Math.round(score * 1000) / 1000,
+      confidence: exactTitle && !suspicious ? 1 : Math.round(score * 1000) / 1000
+    });
+  }
+
+  return candidates.sort((a, b) => {
+    if (a.exactTitle !== b.exactTitle) return a.exactTitle ? -1 : 1;
+    if (a.suspicious !== b.suspicious) return a.suspicious ? 1 : -1;
+    return b.score - a.score;
+  });
+}
+
+async function matchNamedPackageFromSteam(product, matches = null) {
+  const candidates = await discoverNamedPackageCandidates(product, matches);
+  const valid = candidates.filter(x => x.exactTitle && !x.suspicious);
+  if (!valid.length) return null;
+
+  // The same SubID can be discovered through several included apps. After
+  // de-duplication there must still be one unambiguous exact package.
+  const targets = [...new Set(valid.map(x => String(x.steamId)))];
+  if (targets.length !== 1) return null;
+
+  const top = valid.find(x => String(x.steamId) === targets[0]);
+  if (!top) return null;
+
+  return {
+    type: 'package',
+    steamId: String(top.steamId),
+    title: String(product.name || top.name),
+    region: 'ru',
+    savedAt: new Date().toISOString(),
+    coverMode: 'steam',
+    ...(top.coverAppId ? { coverAppId: String(top.coverAppId) } : {}),
+    autoMatched: true,
+    matchSource: 'steam-package-named',
+    steamSearchName: String(top.name),
+    packageKind: namedPackageInfo(product.name).tag,
+    matchConfidence: 1
+  };
+}
+
 async function discoverEditionPackageCandidates(product, baseApp) {
   const wantedEdition = editionInfo(product?.name);
   if (!wantedEdition.tag || wantedEdition.tag === 'standard') return [];
@@ -708,6 +948,16 @@ async function adminSteamCandidates(product, matches = null) {
   const dlcProduct = isDlcDigisellerProduct(product);
   const edition = editionInfo(product?.name);
 
+  if (!dlcProduct && isNamedCollectionPackage(product.name)) {
+    const packages = await discoverNamedPackageCandidates(product, matches);
+    return {
+      mode: 'named-package',
+      query: canonicalCommerceTitle(product.name),
+      baseApp: null,
+      candidates: packages.slice(0, 8)
+    };
+  }
+
   if (!dlcProduct && edition.tag && edition.tag !== 'standard' && !edition.flexible) {
     const baseApp = await findSteamBaseAppCandidate(product, matches);
     const packages = baseApp ? await discoverEditionPackageCandidates(product, baseApp) : [];
@@ -719,12 +969,12 @@ async function adminSteamCandidates(product, matches = null) {
     };
   }
 
-  const query = dlcProduct ? cleanSalesTitle(product.name) : baseGameTitle(product.name);
+  const query = dlcProduct ? cleanSalesTitle(product.name) : canonicalBaseGameTitle(product.name);
   const items = await steamStoreSearch(query);
   const candidates = items.slice(0, 8).map(item => {
     const score = dlcProduct
       ? (cleanSalesTitle(product.name) === cleanSalesTitle(item.name) ? 1 : titleSimilarity(product.name, item.name))
-      : (baseGameTitle(product.name) === baseGameTitle(item.name) ? 1 : titleSimilarity(product.name, item.name));
+      : (baseTitlesEquivalent(product.name, item.name) ? 1 : titleSimilarity(product.name, item.name));
     return {
       type: 'app',
       steamId: String(item.id),
@@ -804,6 +1054,12 @@ async function matchFromSteamSearch(product, matches = null) {
   const dlcProduct = isDlcDigisellerProduct(product);
   const currentEdition = editionInfo(product.name);
 
+  // Explicit collection names such as "Remake Trilogy" are Steam packages,
+  // not apps and not ordinary commercial editions.
+  if (!dlcProduct && isNamedCollectionPackage(product.name)) {
+    return matchNamedPackageFromSteam(product, matches);
+  }
+
   // For ordinary full games, a paid edition/package still requires conservative
   // matching. For DLC this restriction would incorrectly block products such as
   // "Deluxe Pack", which are themselves separate Steam DLC apps.
@@ -832,7 +1088,8 @@ async function matchFromSteamSearch(product, matches = null) {
       ? cleanSalesTitle(item.name)
       : canonicalBaseGameTitle(item.name);
 
-    const exactBase = currentNormalized === itemNormalized;
+    const exactBase = currentNormalized === itemNormalized ||
+      (!dlcProduct && baseTitlesEquivalent(product.name, item.name));
     const standardAlias =
       !dlcProduct &&
       standardEditionStoreAliasMatch(product.name, item.name);
