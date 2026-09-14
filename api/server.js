@@ -211,13 +211,24 @@ function baseGameTitle(value) {
     .trim();
 }
 
+// Comparison-only canonical form. Seller titles frequently omit punctuation that
+// Steam uses as a franchise separator:
+//   "Middle-earth Shadow of War" vs "Middle-earth: Shadow of War"
+// The colon must not make these look like different games.
+function canonicalBaseGameTitle(value) {
+  return baseGameTitle(value)
+    .replace(/:+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function titleTokens(value) {
-  return new Set(baseGameTitle(value).split(/\s+/).filter(x => x.length > 1));
+  return new Set(canonicalBaseGameTitle(value).split(/\s+/).filter(x => x.length > 1));
 }
 
 function titleSimilarity(a, b) {
-  const aa = baseGameTitle(a);
-  const bb = baseGameTitle(b);
+  const aa = canonicalBaseGameTitle(a);
+  const bb = canonicalBaseGameTitle(b);
   if (!aa || !bb) return 0;
   if (aa === bb) return 1;
 
@@ -248,8 +259,8 @@ function editionsCompatible(currentTitle, knownTitle) {
 }
 
 function baseTitlesEquivalent(a, b) {
-  const aa = baseGameTitle(a);
-  const bb = baseGameTitle(b);
+  const aa = canonicalBaseGameTitle(a);
+  const bb = canonicalBaseGameTitle(b);
   if (!aa || !bb) return false;
   if (aa === bb) return true;
 
@@ -335,7 +346,7 @@ function historicalCandidates(product, matches, limit = 5) {
     if (String(oldProductId) === String(product.id)) continue;
 
     const score = titleSimilarity(product.name, item.title);
-    const sameBase = baseGameTitle(product.name) === baseGameTitle(item.title);
+    const sameBase = canonicalBaseGameTitle(product.name) === canonicalBaseGameTitle(item.title);
     const editionOk = editionsCompatible(product.name, item.title);
 
     candidates.push({
@@ -343,7 +354,7 @@ function historicalCandidates(product, matches, limit = 5) {
       steamId: String(item.steamId),
       type: item.type === 'package' ? 'package' : 'app',
       knownTitle: String(item.title),
-      normalizedKnownTitle: baseGameTitle(item.title),
+      normalizedKnownTitle: canonicalBaseGameTitle(item.title),
       score: Math.round(score * 1000) / 1000,
       exactNormalized: sameBase,
       editionCompatible: editionOk
@@ -521,13 +532,13 @@ function historicalBaseAppCandidate(product, matches) {
     score: 1,
     exactBase: true,
     clear: true,
-    query: baseGameTitle(product?.name),
+    query: canonicalBaseGameTitle(product?.name),
     source: 'history-base-app'
   };
 }
 
 async function findSteamBaseAppCandidate(product, matches = null) {
-  const query = baseGameTitle(product?.name);
+  const query = canonicalBaseGameTitle(product?.name);
   if (!query || query.length < 3) return null;
 
   // If another edition of the same game is already mapped to an AppID, reuse
@@ -804,7 +815,7 @@ async function matchFromSteamSearch(product, matches = null) {
   // the actual DLC name. We only remove seller noise (DLC, Gift, regions, etc.).
   const query = dlcProduct
     ? cleanSalesTitle(product.name)
-    : baseGameTitle(product.name);
+    : canonicalBaseGameTitle(product.name);
 
   if (!query || query.length < 3) return null;
 
@@ -816,10 +827,10 @@ async function matchFromSteamSearch(product, matches = null) {
 
     const currentNormalized = dlcProduct
       ? cleanSalesTitle(product.name)
-      : baseGameTitle(product.name);
+      : canonicalBaseGameTitle(product.name);
     const itemNormalized = dlcProduct
       ? cleanSalesTitle(item.name)
-      : baseGameTitle(item.name);
+      : canonicalBaseGameTitle(item.name);
 
     const exactBase = currentNormalized === itemNormalized;
     const standardAlias =
@@ -994,7 +1005,7 @@ async function runAutomaticMatchSync(force = false) {
           isDlc: isDlcDigisellerProduct(product),
           normalizedName: isDlcDigisellerProduct(product)
             ? cleanSalesTitle(product.name)
-            : baseGameTitle(product.name),
+            : canonicalBaseGameTitle(product.name),
           edition: editionInfo(product.name),
           reason: steamSearches >= AUTO_MATCH_MAX_STEAM_SEARCHES ? 'search_limit' : 'low_confidence',
           candidates: historicalCandidates(product, matches, 5)
@@ -2509,7 +2520,7 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         productId,
         productName: product.name,
-        normalizedName: isDlcDigisellerProduct(product) ? cleanSalesTitle(product.name) : baseGameTitle(product.name),
+        normalizedName: isDlcDigisellerProduct(product) ? cleanSalesTitle(product.name) : canonicalBaseGameTitle(product.name),
         edition: editionInfo(product.name),
         ...found
       });
