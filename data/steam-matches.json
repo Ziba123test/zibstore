@@ -1,4 +1,13 @@
 {
+  "2292992": {
+    "type": "package",
+    "steamId": "281112",
+    "title": "Middle-earth: Shadow of War - Definitive (STEAM КЛЮЧ) МИР",
+    "region": "ru",
+    "savedAt": "2026-09-14T16:28:00.411544Z",
+    "coverAppId": "356190",
+    "coverMode": "steam"
+  },
   "3678011": {
     "type": "app",
     "steamId": "1351080",
@@ -46,6 +55,15 @@
     "region": "ru",
     "savedAt": "2026-09-12T01:42:44.331Z",
     "coverAppId": "3017860",
+    "coverMode": "steam"
+  },
+  "5442870": {
+    "type": "package",
+    "steamId": "1418529",
+    "title": "CRIMSON DESERT Deluxe Edition✅STEAM GIFT AUTO✅RU+МИР",
+    "region": "ru",
+    "savedAt": "2026-09-14T16:28:00.411544Z",
+    "coverAppId": "3321460",
     "coverMode": "steam"
   },
   "5636415": {
