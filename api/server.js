@@ -147,6 +147,9 @@ function cleanSalesTitle(value) {
   s = s
     .replace(/[+*|/\\()[\]{}<>—–_-]+/g, ' ')
     .replace(/[^a-zа-яё0-9:'&.]+/giu, ' ')
+    // Removing ™/® can leave a space before punctuation (\"War™:\" -> \"War :\").
+    // Canonicalize colon spacing so seller and Steam titles normalize identically.
+    .replace(/\s*:\s*/g, ': ')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -242,6 +245,42 @@ function editionsCompatible(currentTitle, knownTitle) {
   if (b.tag === 'standard' && !a.tag) return true;
   if (!a.tag || !b.tag) return false;
   return a.tag === b.tag;
+}
+
+function baseTitlesEquivalent(a, b) {
+  const aa = baseGameTitle(a);
+  const bb = baseGameTitle(b);
+  if (!aa || !bb) return false;
+  if (aa === bb) return true;
+
+  // Steam occasionally appends a non-commercial descriptor to the base app
+  // while sellers keep the cleaner retail title. Treat only known-safe aliases
+  // as the same base game. This is intentionally conservative.
+  const softSuffixes = ['enhanced'];
+  return softSuffixes.some(suffix =>
+    aa === `${bb} ${suffix}` || bb === `${aa} ${suffix}`
+  );
+}
+
+function steamSearchTermVariants(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return [];
+
+  const plain = raw
+    .replace(/[:'&.]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const tokens = plain.split(/\s+/).filter(Boolean);
+  const variants = [raw, plain];
+
+  // Steam storesearch can be surprisingly sensitive to punctuation/franchise
+  // prefixes. A shorter tail query fixes titles such as
+  // "Middle-earth: Shadow of War" without weakening final matching rules.
+  if (tokens.length >= 4) variants.push(tokens.slice(-4).join(' '));
+  if (tokens.length >= 5) variants.push(tokens.slice(-3).join(' '));
+
+  return [...new Set(variants.filter(x => x && x.length >= 3))].slice(0, 4);
 }
 
 
@@ -371,17 +410,31 @@ function cloneHistoricalMatch(product, matches) {
 }
 
 async function steamStoreSearch(term) {
-  const q = String(term || '').trim();
-  if (!q) return [];
+  const queries = steamSearchTermVariants(term);
+  if (!queries.length) return [];
 
-  try {
-    const data = await fetchJson(
-      `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(q)}&l=english&cc=us`
-    );
-    return Array.isArray(data?.items) ? data.items : [];
-  } catch (_) {
-    return [];
+  const seen = new Set();
+  const out = [];
+
+  for (const q of queries) {
+    try {
+      const data = await fetchJson(
+        `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(q)}&l=english&cc=us`
+      );
+      for (const item of Array.isArray(data?.items) ? data.items : []) {
+        const id = String(item?.id || '').trim();
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        out.push(item);
+      }
+    } catch (_) {}
+
+    // Once an exact-looking result is present, extra fallback requests are not
+    // useful. The caller still applies strict title/edition checks.
+    if (out.some(item => baseTitlesEquivalent(term, item?.name))) break;
   }
+
+  return out;
 }
 
 
@@ -436,7 +489,7 @@ function bestPackageCoverAppId(productTitle, apps, fallbackAppId = '') {
   const ranked = list
     .map(app => ({
       ...app,
-      exactBase: baseGameTitle(productTitle) === baseGameTitle(app.name),
+      exactBase: baseTitlesEquivalent(productTitle, app.name),
       score: titleSimilarity(productTitle, app.name)
     }))
     .sort((a, b) => {
@@ -450,24 +503,48 @@ function bestPackageCoverAppId(productTitle, apps, fallbackAppId = '') {
   return best?.id || '';
 }
 
-async function findSteamBaseAppCandidate(product) {
+function historicalBaseAppCandidate(product, matches) {
+  if (!matches || typeof matches !== 'object') return null;
+
+  const sameBase = historicalCandidates(product, matches, 30)
+    .filter(c => c.exactNormalized && c.type === 'app');
+  if (!sameBase.length) return null;
+
+  const ids = new Set(sameBase.map(c => String(c.steamId)));
+  if (ids.size !== 1) return null;
+
+  const best = sameBase[0];
+  const source = matches?.[best.oldProductId] || {};
+  return {
+    appId: String(best.steamId),
+    name: String(source.steamSearchName || best.knownTitle || product.name || ''),
+    score: 1,
+    exactBase: true,
+    clear: true,
+    query: baseGameTitle(product?.name),
+    source: 'history-base-app'
+  };
+}
+
+async function findSteamBaseAppCandidate(product, matches = null) {
   const query = baseGameTitle(product?.name);
   if (!query || query.length < 3) return null;
+
+  // If another edition of the same game is already mapped to an AppID, reuse
+  // that AppID as the package-search anchor. This avoids needless Steam search
+  // ambiguity for Standard -> Deluxe/Ultimate transitions.
+  const historical = historicalBaseAppCandidate(product, matches);
+  if (historical) return historical;
 
   const items = await steamStoreSearch(query);
   const scored = [];
 
-  for (const item of items.slice(0, 12)) {
+  for (const item of items.slice(0, 24)) {
     if (!item?.id || !item?.name) continue;
-    const sellerBase = baseGameTitle(product.name);
-    const steamBase = baseGameTitle(item.name);
-    const softBaseAlias =
-      steamBase === `${sellerBase} enhanced` ||
-      sellerBase === `${steamBase} enhanced`;
-    const exactBase = sellerBase === steamBase || softBaseAlias;
+    const exactBase = baseTitlesEquivalent(product.name, item.name);
     const score = exactBase ? 1 : titleSimilarity(product.name, item.name);
     if (!exactBase && score < 0.94) continue;
-    scored.push({ item, exactBase, softBaseAlias, score });
+    scored.push({ item, exactBase, score });
   }
 
   scored.sort((a, b) => {
@@ -552,7 +629,7 @@ async function discoverEditionPackageCandidates(product, baseApp) {
     const label = `${name} ${hint.optionText || ''} ${hint.optionDescription || ''}`.trim();
     const packageEdition = editionInfo(label);
     const editionMatch = packageEdition.tag === wantedEdition.tag;
-    const exactBase = baseGameTitle(product.name) === baseGameTitle(name || hint.optionText || '');
+    const exactBase = baseTitlesEquivalent(product.name, name || hint.optionText || '');
     const score = exactBase ? 1 : titleSimilarity(product.name, name || hint.optionText || '');
     const suspicious = /(?:upgrade|soundtrack|commercial\s+license|season\s+pass)/i.test(label);
     const coverAppId = bestPackageCoverAppId(product.name, apps, baseApp.appId);
@@ -582,11 +659,11 @@ async function discoverEditionPackageCandidates(product, baseApp) {
   });
 }
 
-async function matchEditionPackageFromSteam(product) {
+async function matchEditionPackageFromSteam(product, matches = null) {
   const edition = editionInfo(product?.name);
   if (!edition.tag || edition.tag === 'standard' || edition.flexible) return null;
 
-  const baseApp = await findSteamBaseAppCandidate(product);
+  const baseApp = await findSteamBaseAppCandidate(product, matches);
   if (!baseApp?.clear) return null;
 
   const candidates = await discoverEditionPackageCandidates(product, baseApp);
@@ -616,12 +693,12 @@ async function matchEditionPackageFromSteam(product) {
   };
 }
 
-async function adminSteamCandidates(product) {
+async function adminSteamCandidates(product, matches = null) {
   const dlcProduct = isDlcDigisellerProduct(product);
   const edition = editionInfo(product?.name);
 
   if (!dlcProduct && edition.tag && edition.tag !== 'standard' && !edition.flexible) {
-    const baseApp = await findSteamBaseAppCandidate(product);
+    const baseApp = await findSteamBaseAppCandidate(product, matches);
     const packages = baseApp ? await discoverEditionPackageCandidates(product, baseApp) : [];
     return {
       mode: 'edition-package',
@@ -709,32 +786,10 @@ function standardEditionStoreAliasMatch(productTitle, steamTitle) {
   const edition = editionInfo(productTitle);
   if (edition.tag !== 'standard') return false;
 
-  const sellerBase = baseGameTitle(productTitle);
-  const steamBase = baseGameTitle(steamTitle);
-
-  if (!sellerBase || !steamBase) return false;
-  if (sellerBase === steamBase) return true;
-
-  // Steam sometimes renames the base app with a non-commercial descriptor
-  // while sellers still call the purchased SKU "Standard Edition".
-  //
-  // Example:
-  //   seller: "CRIMSON DESERT Standard Edition"
-  //   Steam:  "Crimson Desert Enhanced"
-  //
-  // We only allow a single soft suffix and only when the seller explicitly
-  // says Standard Edition. Deluxe/Premium/etc. are never accepted this way.
-  const softSuffixes = ['enhanced'];
-
-  for (const suffix of softSuffixes) {
-    if (steamBase === `${sellerBase} ${suffix}`) return true;
-    if (sellerBase === `${steamBase} ${suffix}`) return true;
-  }
-
-  return false;
+  return baseTitlesEquivalent(productTitle, steamTitle);
 }
 
-async function matchFromSteamSearch(product) {
+async function matchFromSteamSearch(product, matches = null) {
   const dlcProduct = isDlcDigisellerProduct(product);
   const currentEdition = editionInfo(product.name);
 
@@ -742,7 +797,7 @@ async function matchFromSteamSearch(product) {
   // matching. For DLC this restriction would incorrectly block products such as
   // "Deluxe Pack", which are themselves separate Steam DLC apps.
   if (!dlcProduct && currentEdition.tag && currentEdition.tag !== 'standard') {
-    return matchEditionPackageFromSteam(product);
+    return matchEditionPackageFromSteam(product, matches);
   }
 
   // DLC titles should keep words such as "Deluxe"/"Premium" because they may be
@@ -922,7 +977,7 @@ async function runAutomaticMatchSync(force = false) {
         // Truly new title: ask Steam and auto-accept only high-confidence app matches.
         if (steamSearches < AUTO_MATCH_MAX_STEAM_SEARCHES) {
           steamSearches++;
-          const steam = await matchFromSteamSearch(product);
+          const steam = await matchFromSteamSearch(product, matches);
           if (steam) {
             matches[productId] = steam;
             changed = true;
@@ -2449,7 +2504,7 @@ const server = http.createServer(async (req, res) => {
       const product = catalog.find(x => String(x.id) === productId);
       if (!product) return adminJson(res, 404, { ok: false, error: 'Digiseller product not found' });
 
-      const found = await adminSteamCandidates(product);
+      const found = await adminSteamCandidates(product, readSteamMatchesFile());
       return adminJson(res, 200, {
         ok: true,
         productId,
