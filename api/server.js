@@ -120,6 +120,10 @@ function cleanSalesTitle(value) {
   const hadPercent = rawTitle.includes('%');
 
   let s = rawTitle
+    // Seller-only release-year disambiguator, e.g. "Fable (2027)".
+    // Do this before parentheses are converted into spaces below.
+    .replace(/\((?:19|20)\d{2}\)/g, ' ')
+
     // Remove trademark/copyright marks BEFORE NFKC.
     // NFKC turns ™ into literal "TM", which previously made:
     //   "STAR WARS Zero Company™" -> "star wars zero companytm"
