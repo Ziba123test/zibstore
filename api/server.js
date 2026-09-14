@@ -240,6 +240,18 @@ function editionsCompatible(currentTitle, knownTitle) {
 
 
 
+function hasDlcTitleLabel(title) {
+  const name = String(title || '').normalize('NFKC').toLowerCase();
+  // Ignore bundle wording, e.g. "Game + DLC" or "Game includes DLC".
+  // Check the title only; descriptions often mention optional add-ons.
+  const standalone = name.replace(
+    /(?:[+＋]|\b(?:includes?|including|with|and)\b|включая|включает|\sс\s)\s*(?:(?:all|все|\d+)\s+)?dlc\b/giu,
+    ' '
+  );
+  return /(?:^|[^\p{L}\p{N}_])dlc(?:$|[^\p{L}\p{N}_])/iu.test(standalone)
+    || /\bdownloadable\s+content\b/i.test(standalone);
+}
+
 function isDlcDigisellerProduct(product) {
   const category = String(product?.categoryName || product?._categoryName || '')
     .normalize('NFKC')
@@ -253,7 +265,7 @@ function isDlcDigisellerProduct(product) {
     /\bdlc\b/i.test(category) ||
     /\badd[\s-]?on\b/i.test(category) ||
     /\bexpansion\b/i.test(category) ||
-    /^\s*dlc(?:\s|:|-)/i.test(name) ||
+    hasDlcTitleLabel(name) ||
     /\bdownloadable\s+content\b/i.test(name)
   );
 }
