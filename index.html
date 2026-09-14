@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <!-- ZibStore v91: filter by expanded editions only -->
+  <!-- ZibStore v94: self-contained dropdown labels -->
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>ЗибСтор — Ключи игр | Честное сравнение цен</title>
@@ -95,11 +95,10 @@
       <div class="mb-4 flex flex-wrap items-center justify-between gap-4">
         <h2 class="font-display text-2xl font-bold">Витрина</h2>
         <div class="flex items-center gap-2 text-sm">
-          <span class="text-nox-muted">Сортировка</span>
-          <select id="sort-select" class="rounded-lg border border-nox-border bg-nox-card px-3 py-2 text-white outline-none focus:border-nox-accent">
-            <option value="popular">Популярное</option>
-            <option value="price">Дешевле</option>
-            <option value="priceDESC">Дороже</option>
+          <select id="sort-select" aria-label="Порядок товаров" style="appearance: auto; color-scheme: dark" class="rounded-lg border border-nox-border bg-nox-card px-3 py-2 text-white outline-none focus:border-nox-accent">
+            <option value="popular">Сначала популярные</option>
+            <option value="price">Сначала дешёвые</option>
+            <option value="priceDESC">Сначала дорогие</option>
           </select>
         </div>
       </div>
@@ -116,13 +115,12 @@
            Нужен прежде всего для категорий ключей/гифтов, где продавцы смешивают
            обычные игры и DLC. -->
       <div id="catalog-toolbar" class="mb-6 flex h-10 items-center justify-between gap-2 text-xs sm:text-sm">
+        <span id="product-count" class="shrink-0 text-nox-muted" role="status" aria-live="polite">Загрузка…</span>
         <label id="edition-filter-wrap" class="flex min-w-0 items-center gap-2">
-          <span class="text-nox-muted">Издание</span>
-          <select id="edition-filter" aria-label="Издание игры" style="appearance: auto; color-scheme: dark" class="min-w-0 max-w-[190px] rounded-lg border border-nox-border bg-nox-card px-3 py-2 text-white outline-none focus:border-nox-accent">
-            <option value="all">Все издания</option>
+          <select id="edition-filter" aria-label="Издание игры" style="appearance: auto; color-scheme: dark" class="min-w-0 max-w-[260px] rounded-lg border border-nox-border bg-nox-card px-3 py-2 text-white outline-none focus:border-nox-accent">
+            <option value="all">Издание: все</option>
           </select>
         </label>
-        <span id="product-count" class="shrink-0 text-nox-muted" role="status" aria-live="polite">Загрузка…</span>
       </div>
 
       <div id="api-banner" class="hidden mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300"></div>
@@ -1186,8 +1184,8 @@ function hasDlcTitleLabel(title) {
   }
 
   const EDITION_OPTIONS = [
-    ['deluxe', 'Deluxe'], ['premium', 'Premium'],
-    ['gold', 'Gold'], ['ultimate', 'Ultimate'], ['other', 'Другие издания']
+    ['deluxe', 'делюкс'], ['premium', 'премиум'],
+    ['gold', 'голд'], ['ultimate', 'ультимейт'], ['other', 'другое']
   ];
 
   function getProductEdition(product) {
@@ -1208,6 +1206,7 @@ function hasDlcTitleLabel(title) {
   function matchesEditionFilter(product, filter) {
     const edition = getProductEdition(product);
     if (filter === 'all') return true;
+    if (filter === 'expanded') return EDITION_OPTIONS.some(([value]) => value === edition);
     if (filter === 'no-expanded') {
       return !EDITION_OPTIONS.some(([value]) => value === edition);
     }
@@ -1221,10 +1220,10 @@ function hasDlcTitleLabel(title) {
     editionFilterWrap.setAttribute('aria-hidden', String(!visible));
     editionFilterSelect.tabIndex = visible ? 0 : -1;
     const available = new Set(state.rawProducts.map(getProductEdition));
-    if (!visible || (state.editionFilter !== 'no-expanded' && !available.has(state.editionFilter))) state.editionFilter = 'all';
-    editionFilterSelect.innerHTML = '<option value="all">Все издания</option><option value="no-expanded">Без расширенных</option>' +
+    if (!visible || (!['no-expanded', 'expanded'].includes(state.editionFilter) && !available.has(state.editionFilter))) state.editionFilter = 'all';
+    editionFilterSelect.innerHTML = '<option value="all">Издание: все</option><option value="no-expanded">Издание: без расширенных</option><option value="expanded">Издание: расширенное</option>' +
       EDITION_OPTIONS.filter(([value]) => available.has(value)).map(([value, label]) =>
-        `<option value="${value}">${label}</option>`).join('');
+        `<option value="${value}">Издание: ${label}</option>`).join('');
     editionFilterSelect.value = state.editionFilter;
   }
 
