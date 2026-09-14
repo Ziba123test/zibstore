@@ -116,7 +116,10 @@ function extractSteamPageImages(html) {
 
 
 function cleanSalesTitle(value) {
-  let s = String(value || '')
+  const rawTitle = String(value || '');
+  const hadPercent = rawTitle.includes('%');
+
+  let s = rawTitle
     // Remove trademark/copyright marks BEFORE NFKC.
     // NFKC turns ™ into literal "TM", which previously made:
     //   "STAR WARS Zero Company™" -> "star wars zero companytm"
@@ -159,8 +162,8 @@ function cleanSalesTitle(value) {
     'авто','автодоставка','ключ','гифт','подарок','бонус',
     'дополнение','дополнения','доп',
     'россия','мир','снг','рф','ру','уа',
-    'ru','rf','ua','by','kz','tr','ar','cis',
-    'кз','тр','ар',
+    'ru','rf','ua','by','kz','tr','ar','cis','latam',
+    'кз','тр','ар','латам',
     'chг','chн','снg','снг',
     'world','global','worldwide',
     'tm','sm',
@@ -173,7 +176,7 @@ function cleanSalesTitle(value) {
 
   // A percentage may be written with unusual spacing and lose the '%' during cleanup.
   // Remove a lone trailing small numeric token only when the rest already looks like a title.
-  if (tokens.length >= 3 && /^\d{1,2}$/.test(tokens[tokens.length - 1])) {
+  if (hadPercent && tokens.length >= 3 && /^\d{1,2}$/.test(tokens[tokens.length - 1])) {
     tokens.pop();
   }
 
@@ -190,6 +193,7 @@ function editionInfo(value) {
     ['complete', /\bcomplete\b/i],
     ['collector', /\bcollector'?s?\b/i],
     ['definitive', /\bdefinitive\b/i],
+    ['commander', /\bcommander(?:\s+edition)?\b/i],
     ['anniversary', /\banniversary\b/i],
     ['goty', /\bgoty\b|\bgame\s+of\s+the\s+year\b/i],
     ['special', /\bspecial(?:\s+edition)?\b/i],
@@ -206,7 +210,7 @@ function editionInfo(value) {
 function baseGameTitle(value) {
   return cleanSalesTitle(value)
     .replace(/\bgame\s+of\s+the\s+year\b/gi, ' ')
-    .replace(/\b(?:premium|deluxe|ultimate|gold|complete|collector'?s?|definitive|anniversary|goty|special|limited|divine|eternal|bundle)(?:\s+edition)?\b/gi, ' ')
+    .replace(/\b(?:premium|deluxe|ultimate|gold|complete|collector'?s?|definitive|commander|anniversary|goty|special|limited|divine|eternal|bundle)(?:\s+edition)?\b/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -328,7 +332,11 @@ function steamSearchTermVariants(value) {
     .trim();
 
   const tokens = plain.split(/\s+/).filter(Boolean);
-  const variants = [raw, plain];
+  const softAlias = plain
+    .replace(/\b(?:remake|enhanced)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const variants = [raw, plain, softAlias];
 
   // Steam storesearch can be surprisingly sensitive to punctuation/franchise
   // prefixes. A shorter tail query fixes titles such as
@@ -336,7 +344,7 @@ function steamSearchTermVariants(value) {
   if (tokens.length >= 4) variants.push(tokens.slice(-4).join(' '));
   if (tokens.length >= 5) variants.push(tokens.slice(-3).join(' '));
 
-  return [...new Set(variants.filter(x => x && x.length >= 3))].slice(0, 4);
+  return [...new Set(variants.filter(x => x && x.length >= 3))].slice(0, 5);
 }
 
 
@@ -391,7 +399,7 @@ function historicalCandidates(product, matches, limit = 5) {
     if (String(oldProductId) === String(product.id)) continue;
 
     const score = titleSimilarity(product.name, item.title);
-    const sameBase = canonicalBaseGameTitle(product.name) === canonicalBaseGameTitle(item.title);
+    const sameBase = baseTitlesEquivalent(product.name, item.title);
     const editionOk = editionsCompatible(product.name, item.title);
 
     candidates.push({
