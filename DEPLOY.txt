@@ -1,0 +1,49 @@
+ЗибСтор v97 — исправление автоматического определения Steam Package/SubID
+
+Что исправлено относительно v96:
+1. Middle-earth: Shadow of War Definitive:
+   - Steam может возвращать название с символом ™ перед двоеточием;
+   - после удаления ™ раньше получалось "middle earth : shadow of war", а у Digiseller — "middle earth: shadow of war";
+   - из-за этого базовая игра не считалась точным совпадением и Package 281112 не находился;
+   - нормализация двоеточия исправлена.
+2. Поиск базовой игры теперь использует несколько безопасных вариантов запроса:
+   - исходное нормализованное название;
+   - вариант без пунктуации;
+   - короткие хвостовые варианты для случаев, когда Steam плохо ищет длинное/franchise-название.
+   Финальное сопоставление при этом остаётся строгим.
+3. Crimson Desert Deluxe:
+   - Steam называет базовую игру "Crimson Desert Enhanced";
+   - алиас "Enhanced" теперь учитывается не только при поиске AppID, но и при проверке Package;
+   - поэтому Package/SubID 1418529 может проходить автоматическую проверку как правильное Deluxe-издание.
+4. Если в истории уже есть другое издание той же игры с однозначным AppID (например Standard Edition), API использует этот AppID как базу для поиска Deluxe/Ultimate/Definitive package. Это делает автоматизацию стабильнее и уменьшает зависимость от Steam storesearch.
+
+Функционально изменён только:
+- api/server.js
+
+admin/covers.html из v96 менять не нужно.
+index.html менять не нужно.
+Новых npm-зависимостей нет.
+
+GitHub:
+1. Заменить api/server.js версией из v97.
+2. DEPLOY.txt можно заменить для документации.
+3. Остальные файлы относительно v96 не менялись.
+4. Живой data/steam-matches.json не перезаписывать.
+
+Обновление VPS:
+cd /var/www/zibstore/source
+git pull --ff-only
+cp /var/www/zibstore/source/api/server.js /var/www/zibstore/api/server.js
+sudo systemctl restart zibstore-api
+sudo systemctl status zibstore-api --no-pager
+curl -s https://api.zibstore.ru/health
+
+После перезапуска:
+1. Открыть админку.
+2. Нажать «Синхронизировать Digiseller».
+3. Проверить, что CRIMSON DESERT Deluxe и Middle-earth: Shadow of War Definitive исчезли из неопределённых.
+4. Если они ещё остались, нажать «Найти AppID / Package» для диагностики — в v97 Middle-earth должен как минимум определить базовый AppID, а Crimson должен показывать Deluxe package как точное/рекомендуемое совпадение.
+
+Ожидаемые цели:
+- Middle-earth: Shadow of War Definitive -> package 281112, coverAppId 356190
+- CRIMSON DESERT Deluxe Edition -> package 1418529, coverAppId 3321460
