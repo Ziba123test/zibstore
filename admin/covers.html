@@ -70,6 +70,18 @@
     .sync-candidates{display:grid;gap:7px;margin-top:10px}
     .sync-candidate{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px;border:1px solid #332a25;border-radius:10px;background:#0f0d0c}
     .sync-candidate small{display:block;color:#998f88}
+    .steam-tools{margin-top:12px;padding-top:12px;border-top:1px solid #332a25;display:grid;gap:10px}
+    .steam-tools-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+    .steam-results{display:grid;gap:7px}
+    .steam-result{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:9px;border:1px solid #3a312c;border-radius:10px;background:#100e0c}
+    .steam-result.recommended{border-color:#527c5d}
+    .steam-result small{display:block;color:#998f88;margin-top:2px}
+    .steam-result .confidence{color:#6ee7a8;font-weight:800}
+    .steam-manual{display:grid;grid-template-columns:150px minmax(180px,1fr) minmax(170px,1fr) auto auto;gap:7px;align-items:center}
+    .steam-manual select,.steam-manual input{width:100%;min-width:0}
+    .steam-preview{grid-column:1/-1;font-size:12px;color:#bdb4ad;min-height:18px}
+    .steam-preview strong{color:#f4f1ed}
+    @media (max-width:850px){.steam-manual{grid-template-columns:1fr 1fr}.steam-manual .wide{grid-column:1/-1}.steam-manual button{width:100%}}
   </style>
 </head>
 <body>
@@ -798,6 +810,89 @@ document.querySelector('#q').addEventListener('input',render);
 document.querySelector('#filter').addEventListener('change',render);
 document.querySelector('#reload').onclick=load;
 
+async function saveDirectSteamMatch(item, target, button, card){
+  const oldText = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Сохраняю…';
+
+  try{
+    const r = await apiFetch('/api/admin/set-steam-match',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        productId:item.productId,
+        steamType:target.type,
+        steamId:target.steamId,
+        coverAppId:target.coverAppId || ''
+      })
+    });
+    const saved = await r.json();
+    if(!r.ok || !saved.ok) throw new Error(saved.error || `HTTP ${r.status}`);
+
+    button.textContent = 'Готово';
+    const status = document.querySelector('#syncStatus');
+    status.textContent = `Привязано: ${item.name} → ${saved.item.type} ${saved.item.steamId}.`;
+    card.remove();
+    await load();
+  }catch(e){
+    button.disabled = false;
+    button.textContent = oldText;
+    alert(e.message);
+  }
+}
+
+function drawSteamCandidates(item, data, host, card){
+  host.innerHTML = '';
+
+  if(data.baseApp?.appId){
+    const base = document.createElement('div');
+    base.className = 'muted';
+    base.textContent = `Базовая игра: ${data.baseApp.name} · AppID ${data.baseApp.appId}${data.baseApp.clear ? ' · уверенное совпадение' : ' · требуется проверка'}`;
+    host.appendChild(base);
+  }
+
+  const candidates = Array.isArray(data.candidates) ? data.candidates : [];
+  if(!candidates.length){
+    const empty = document.createElement('div');
+    empty.className = 'muted';
+    empty.textContent = 'Подходящих вариантов Steam не найдено. Можно указать AppID или Package/SubID вручную ниже.';
+    host.appendChild(empty);
+    return;
+  }
+
+  for(const c of candidates){
+    const recommended = Boolean(c.editionMatch && c.exactBase && !c.suspicious && Number(c.confidence) >= .999);
+    const row = document.createElement('div');
+    row.className = `steam-result ${recommended ? 'recommended' : ''}`;
+
+    const appNames = Array.isArray(c.apps)
+      ? c.apps.slice(0,4).map(x => x.name || `App ${x.id}`).filter(Boolean).join(' + ')
+      : '';
+    const score = Number(c.confidence ?? c.score ?? 0);
+    const scoreText = Number.isFinite(score) ? `${Math.round(score * 100)}%` : '';
+
+    row.innerHTML = `
+      <div>
+        <strong>${escapeHtml(c.name || `${c.type} ${c.steamId}`)}</strong>
+        ${recommended ? `<small class="confidence">Рекомендуется · ${escapeHtml(scoreText || '100%')}</small>` : ''}
+        <small>${escapeHtml(c.type === 'package' ? 'Package/SubID' : 'AppID')} ${escapeHtml(c.steamId)}${scoreText && !recommended ? ` · совпадение ${escapeHtml(scoreText)}` : ''}</small>
+        ${c.optionText ? `<small>${escapeHtml(c.optionText)}</small>` : ''}
+        ${appNames ? `<small>Состав: ${escapeHtml(appNames)}</small>` : ''}
+        ${c.suspicious ? `<small class="badText">Похоже на upgrade/soundtrack/служебный пакет — проверь вручную.</small>` : ''}
+      </div>
+      <button class="${recommended ? 'primary' : ''}">Привязать</button>
+    `;
+
+    row.querySelector('button').onclick = () => saveDirectSteamMatch(item,{
+      type:c.type === 'package' ? 'package' : 'app',
+      steamId:String(c.steamId),
+      coverAppId:String(c.coverAppId || '')
+    },row.querySelector('button'),card);
+
+    host.appendChild(row);
+  }
+}
+
 function renderSyncDetails(data){
   const box = document.querySelector('#syncDetails');
   const unresolved = Array.isArray(data.unresolved) ? data.unresolved : [];
@@ -825,18 +920,41 @@ function renderSyncDetails(data){
     el.className = 'sync-item';
 
     const candidates = Array.isArray(item.candidates) ? item.candidates : [];
+    const editionTag = item.edition?.tag || '';
     el.innerHTML = `
       <h3>${escapeHtml(item.name)}</h3>
       <div class="muted">Product ID ${escapeHtml(item.productId)}</div>
-      <div class="muted">Нормализовано: ${escapeHtml(item.normalizedName || '')}</div>
+      <div class="muted">Нормализовано: ${escapeHtml(item.normalizedName || '')}${editionTag ? ` · издание: ${escapeHtml(editionTag)}` : ''}</div>
       <div class="sync-candidates"></div>
+      <div class="steam-tools">
+        <div class="steam-tools-head">
+          <strong>Поиск Steam</strong>
+          <button data-action="steamSearch">Найти AppID / Package</button>
+        </div>
+        <div data-k="steamResults" class="steam-results"><div class="muted">Для Deluxe / Definitive / Ultimate и других изданий админка проверит пакеты базовой игры.</div></div>
+        <div class="steam-manual">
+          <select data-k="manualType">
+            <option value="app">AppID</option>
+            <option value="package">Package / SubID</option>
+          </select>
+          <input data-k="manualId" inputmode="numeric" placeholder="Steam ID">
+          <input class="wide" data-k="manualCoverAppId" inputmode="numeric" placeholder="coverAppId для Package (необязательно)">
+          <button data-action="inspectSteam">Проверить</button>
+          <button class="primary" data-action="saveSteam" disabled>Сохранить</button>
+          <div data-k="steamPreview" class="steam-preview">Ручной режим — запасной вариант, если автоматический поиск не нашёл нужное издание.</div>
+        </div>
+      </div>
     `;
 
     const list = el.querySelector('.sync-candidates');
-
     if(!candidates.length){
       list.innerHTML = `<div class="muted">Исторических кандидатов не найдено.</div>`;
     }else{
+      const historyTitle = document.createElement('div');
+      historyTitle.className = 'muted';
+      historyTitle.textContent = 'Кандидаты из истории:';
+      list.appendChild(historyTitle);
+
       for(const c of candidates){
         const row = document.createElement('div');
         row.className = 'sync-candidate';
@@ -870,6 +988,7 @@ function renderSyncDetails(data){
             if(!r.ok || !saved.ok) throw new Error(saved.error || `HTTP ${r.status}`);
 
             btn.textContent = 'Готово';
+            el.remove();
             await load();
           }catch(e){
             btn.disabled = false;
@@ -881,6 +1000,83 @@ function renderSyncDetails(data){
         list.appendChild(row);
       }
     }
+
+    const steamResults = el.querySelector('[data-k="steamResults"]');
+    const steamSearchBtn = el.querySelector('[data-action="steamSearch"]');
+    steamSearchBtn.onclick = async () => {
+      steamSearchBtn.disabled = true;
+      steamSearchBtn.textContent = 'Ищу…';
+      steamResults.innerHTML = '<div class="muted">Ищу базовую игру и доступные Steam-пакеты…</div>';
+      try{
+        const r = await apiFetch('/api/admin/steam-match-candidates?productId=' + encodeURIComponent(item.productId));
+        const found = await r.json();
+        if(!r.ok || !found.ok) throw new Error(found.error || `HTTP ${r.status}`);
+        drawSteamCandidates(item,found,steamResults,el);
+      }catch(e){
+        steamResults.innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
+      }finally{
+        steamSearchBtn.disabled = false;
+        steamSearchBtn.textContent = 'Найти AppID / Package';
+      }
+    };
+
+    const manualType = el.querySelector('[data-k="manualType"]');
+    const manualId = el.querySelector('[data-k="manualId"]');
+    const manualCover = el.querySelector('[data-k="manualCoverAppId"]');
+    const inspectBtn = el.querySelector('[data-action="inspectSteam"]');
+    const saveBtn = el.querySelector('[data-action="saveSteam"]');
+    const preview = el.querySelector('[data-k="steamPreview"]');
+    let verifiedTarget = null;
+
+    const invalidateManual = () => {
+      verifiedTarget = null;
+      saveBtn.disabled = true;
+    };
+    manualType.onchange = invalidateManual;
+    manualId.oninput = invalidateManual;
+    manualCover.oninput = invalidateManual;
+
+    inspectBtn.onclick = async () => {
+      const steamId = manualId.value.trim();
+      if(!/^\d+$/.test(steamId)){
+        preview.innerHTML = '<span class="err">Введи числовой Steam ID.</span>';
+        return;
+      }
+
+      inspectBtn.disabled = true;
+      preview.textContent = 'Проверяю Steam…';
+      invalidateManual();
+
+      try{
+        const qs = new URLSearchParams({
+          productId:String(item.productId),
+          steamType:manualType.value,
+          steamId,
+          coverAppId:manualCover.value.trim()
+        });
+        const r = await apiFetch('/api/admin/inspect-steam-target?' + qs.toString());
+        const checked = await r.json();
+        if(!r.ok || !checked.ok) throw new Error(checked.error || `HTTP ${r.status}`);
+
+        verifiedTarget = checked.target;
+        const apps = Array.isArray(checked.target.apps)
+          ? checked.target.apps.slice(0,6).map(x => `${x.name || 'App'} (${x.id})`).join(', ')
+          : '';
+        preview.innerHTML = `<strong>${escapeHtml(checked.target.name)}</strong> · ${escapeHtml(checked.target.type)} ${escapeHtml(checked.target.steamId)}` +
+          (checked.target.coverAppId ? ` · coverAppId ${escapeHtml(checked.target.coverAppId)}` : '') +
+          (apps ? `<br>Состав: ${escapeHtml(apps)}` : '');
+        saveBtn.disabled = false;
+      }catch(e){
+        preview.innerHTML = `<span class="err">${escapeHtml(e.message)}</span>`;
+      }finally{
+        inspectBtn.disabled = false;
+      }
+    };
+
+    saveBtn.onclick = () => {
+      if(!verifiedTarget) return;
+      saveDirectSteamMatch(item,verifiedTarget,saveBtn,el);
+    };
 
     box.appendChild(el);
   }
@@ -896,7 +1092,8 @@ document.querySelector('#syncDigiseller').onclick = async () => {
     if(!r.ok || !data.ok) throw new Error((data.errors || []).join(', ') || `HTTP ${r.status}`);
 
     el.textContent =
-      `Готово: из истории ${data.inherited || 0}, через Steam ${data.steamSearchMatched || 0}, ` +
+      `Готово: из истории ${data.inherited || 0}, Steam App ${data.steamSearchMatched || 0}, ` +
+      `Steam Package ${data.steamPackageMatched || 0}, ` +
       `игнорируется ${Array.isArray(data.ignored) ? data.ignored.length : 0}, ` +
       `не определено ${Array.isArray(data.unresolved) ? data.unresolved.length : 0}.`;
 
