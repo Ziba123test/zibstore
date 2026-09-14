@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <!-- ZibStore v90: edition dropdown and stable catalog toolbar -->
+  <!-- ZibStore v91: filter by expanded editions only -->
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>ЗибСтор — Ключи игр | Честное сравнение цен</title>
@@ -992,7 +992,7 @@
 
     renderEditionFilter();
     if (shouldShowEditionFilter() && state.editionFilter !== 'all') {
-      filtered = filtered.filter(product => getProductEdition(product) === state.editionFilter);
+      filtered = filtered.filter(product => matchesEditionFilter(product, state.editionFilter));
     }
 
     if (state.search) {
@@ -1186,9 +1186,8 @@ function hasDlcTitleLabel(title) {
   }
 
   const EDITION_OPTIONS = [
-    ['standard', 'Базовое'], ['deluxe', 'Deluxe'], ['premium', 'Premium'],
-    ['gold', 'Gold'], ['ultimate', 'Ultimate'], ['other', 'Другие издания'],
-    ['choice', 'Выбор издания'], ['unspecified', 'Не указано']
+    ['deluxe', 'Deluxe'], ['premium', 'Premium'],
+    ['gold', 'Gold'], ['ultimate', 'Ultimate'], ['other', 'Другие издания']
   ];
 
   function getProductEdition(product) {
@@ -1201,9 +1200,18 @@ function hasDlcTitleLabel(title) {
     if (/\bultimate\b|ультимейт/iu.test(title)) return 'ultimate';
     if (/\bgold(?:\s+edition)?\b|золотое\s+издание/iu.test(title)) return 'gold';
     if (/\b(?:complete|goty|collector[’']?s?|anniversary|special|divine|eternal)\s+edition\b|\bgoty\b|game\s+of\s+the\s+year|полное\s+издание/iu.test(title)) return 'other';
-    // Definitive/Enhanced/Remastered can name the base release itself.
-    if (/\bstandard\b|(?:definitive|enhanced)\s+edition|базов(?:ое|ая)|стандартн(?:ое|ая)/iu.test(title)) return 'standard';
-    return 'unspecified';
+    // No separate base/unknown bucket in the UI. Only explicit upgrades in
+    // full-game editions are classified; release names are not extra editions.
+    return '';
+  }
+
+  function matchesEditionFilter(product, filter) {
+    const edition = getProductEdition(product);
+    if (filter === 'all') return true;
+    if (filter === 'no-expanded') {
+      return !EDITION_OPTIONS.some(([value]) => value === edition);
+    }
+    return edition === filter;
   }
 
   function renderEditionFilter() {
@@ -1213,8 +1221,8 @@ function hasDlcTitleLabel(title) {
     editionFilterWrap.setAttribute('aria-hidden', String(!visible));
     editionFilterSelect.tabIndex = visible ? 0 : -1;
     const available = new Set(state.rawProducts.map(getProductEdition));
-    if (!visible || !available.has(state.editionFilter)) state.editionFilter = 'all';
-    editionFilterSelect.innerHTML = '<option value="all">Все издания</option>' +
+    if (!visible || (state.editionFilter !== 'no-expanded' && !available.has(state.editionFilter))) state.editionFilter = 'all';
+    editionFilterSelect.innerHTML = '<option value="all">Все издания</option><option value="no-expanded">Без расширенных</option>' +
       EDITION_OPTIONS.filter(([value]) => available.has(value)).map(([value, label]) =>
         `<option value="${value}">${label}</option>`).join('');
     editionFilterSelect.value = state.editionFilter;
