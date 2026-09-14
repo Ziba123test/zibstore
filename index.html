@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <!-- ZibStore v89: filter selection and DLC title recognition fixes -->
+  <!-- ZibStore v90: edition dropdown and stable catalog toolbar -->
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>ЗибСтор — Ключи игр | Честное сравнение цен</title>
@@ -115,22 +115,14 @@
       <!-- Независимый фильтр содержимого.
            Нужен прежде всего для категорий ключей/гифтов, где продавцы смешивают
            обычные игры и DLC. -->
-      <div id="content-filter-wrap" class="mb-6 hidden items-center gap-2 text-xs sm:text-sm">
-        <span class="mr-1 text-nox-muted">Содержимое</span>
-        <div id="content-filter-strip" class="flex flex-wrap gap-2">
-          <button type="button" data-content-filter="all"
-            class="content-filter-btn rounded-full border border-nox-accent bg-nox-accent/10 px-3 py-1.5 font-medium text-nox-accent transition">
-            Всё
-          </button>
-          <button type="button" data-content-filter="games"
-            class="content-filter-btn rounded-full border border-nox-border px-3 py-1.5 font-medium text-nox-muted transition hover:border-white/30 hover:text-white">
-            Без DLC
-          </button>
-          <button type="button" data-content-filter="dlc"
-            class="content-filter-btn rounded-full border border-violet-400/30 bg-violet-500/5 px-3 py-1.5 font-medium text-violet-200 transition hover:border-violet-300/60 hover:bg-violet-500/10">
-            Только DLC
-          </button>
-        </div>
+      <div id="catalog-toolbar" class="mb-6 flex h-10 items-center justify-between gap-2 text-xs sm:text-sm">
+        <label id="edition-filter-wrap" class="flex min-w-0 items-center gap-2">
+          <span class="text-nox-muted">Издание</span>
+          <select id="edition-filter" aria-label="Издание игры" style="appearance: auto; color-scheme: dark" class="min-w-0 max-w-[190px] rounded-lg border border-nox-border bg-nox-card px-3 py-2 text-white outline-none focus:border-nox-accent">
+            <option value="all">Все издания</option>
+          </select>
+        </label>
+        <span id="product-count" class="shrink-0 text-nox-muted" role="status" aria-live="polite">Загрузка…</span>
       </div>
 
       <div id="api-banner" class="hidden mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300"></div>
@@ -359,7 +351,7 @@
 
   const state = {
     categoryId: 'all',
-    contentFilter: 'all', // all | games | dlc
+    editionFilter: 'all',
     categoriesList: [],   // реальные категории с API (без псевдо-"Все")
     rawProducts: [],      // сырые товары текущей категории/подборки, как пришли с сервера
     order: 'popular',
@@ -396,8 +388,9 @@
   const emptyEl = document.getElementById('empty-state');
   const bannerEl = document.getElementById('api-banner');
   const catStrip = document.getElementById('category-strip');
-  const contentFilterWrap = document.getElementById('content-filter-wrap');
-  const contentFilterStrip = document.getElementById('content-filter-strip');
+  const editionFilterWrap = document.getElementById('edition-filter-wrap');
+  const editionFilterSelect = document.getElementById('edition-filter');
+  const productCount = document.getElementById('product-count');
 
   // ---- Демо-данные на случай, если запрос к API не прошёл (сеть/CORS) ----
   const FALLBACK_PRODUCTS = [
@@ -903,12 +896,13 @@
       btn.addEventListener('click', () => {
         state.categoryId = isNaN(btn.dataset.catId) ? btn.dataset.catId : Number(btn.dataset.catId);
         state.page = 1;
+        state.editionFilter = 'all';
         renderCategoryStrip();
         loadProducts();
       });
     });
 
-    renderContentFilter();
+    renderEditionFilter();
   }
 
   // ---------------- Загрузка товаров ----------------
@@ -965,6 +959,7 @@
       if (requestId !== productsRequestId) return;
       state.rawProducts = products;
       state.isFallback = false;
+      editionFilterSelect.disabled = false;
       applyAndRender();
     } catch (err) {
       if (requestId !== productsRequestId) return;
@@ -972,6 +967,7 @@
       showBanner('Не удалось получить каталог напрямую из браузера. Показаны демо-товары — технические детали в консоли браузера (F12).');
       state.rawProducts = FALLBACK_PRODUCTS;
       state.isFallback = true;
+      editionFilterSelect.disabled = false;
       applyAndRender();
     }
   }
@@ -994,18 +990,16 @@
   function applyAndRender() {
     let filtered = state.rawProducts;
 
-    if (shouldShowContentFilter()) {
-      if (state.contentFilter === 'games') {
-        filtered = filtered.filter(product => !isDlcProduct(product));
-      } else if (state.contentFilter === 'dlc') {
-        filtered = filtered.filter(product => isDlcProduct(product));
-      }
+    renderEditionFilter();
+    if (shouldShowEditionFilter() && state.editionFilter !== 'all') {
+      filtered = filtered.filter(product => getProductEdition(product) === state.editionFilter);
     }
 
     if (state.search) {
       const q = state.search.toLowerCase();
       filtered = filtered.filter(p => p.name.toLowerCase().includes(q));
     }
+    productCount.textContent = `Товаров: ${filtered.length}`;
     const sorted = applySort(filtered, state.order);
 
     const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
@@ -1025,6 +1019,8 @@
   }
 
   function renderSkeletons() {
+    productCount.textContent = 'Загрузка…';
+    editionFilterSelect.disabled = true;
     grid.innerHTML = Array.from({ length: PAGE_SIZE }).map(() => `
       <div class="rounded-2xl border border-nox-border bg-nox-card overflow-hidden">
         <div class="skeleton aspect-[3/4]"></div>
@@ -1048,7 +1044,6 @@
       { re: /\bgold(?:\s+edition)?\b/i, label: 'GOLD' },
       { re: /\bcomplete(?:\s+edition)?\b/i, label: 'COMPLETE' },
       { re: /\bcollector'?s?(?:\s+edition)?\b/i, label: 'COLLECTOR' },
-      { re: /\bdefinitive(?:\s+edition)?\b/i, label: 'DEFINITIVE' },
       { re: /\banniversary(?:\s+edition)?\b/i, label: 'ANNIVERSARY' },
       { re: /\bbundle\b/i, label: 'BUNDLE' }
     ];
@@ -1186,37 +1181,49 @@ function hasDlcTitleLabel(title) {
     return 'other';
   }
 
-  function shouldShowContentFilter() {
-    const kind = selectedCategoryKind();
-    return kind === 'all' || kind === 'key' || kind === 'gift';
+  function shouldShowEditionFilter() {
+    return ['all', 'key', 'gift'].includes(selectedCategoryKind());
   }
 
-  function renderContentFilter() {
-    const visible = shouldShowContentFilter();
-    contentFilterWrap.classList.toggle('hidden', !visible);
-    contentFilterWrap.classList.toggle('flex', visible);
+  const EDITION_OPTIONS = [
+    ['standard', 'Базовое'], ['deluxe', 'Deluxe'], ['premium', 'Premium'],
+    ['gold', 'Gold'], ['ultimate', 'Ultimate'], ['other', 'Другие издания'],
+    ['choice', 'Выбор издания'], ['unspecified', 'Не указано']
+  ];
 
-    contentFilterStrip.querySelectorAll('[data-content-filter]').forEach(button => {
-      const type = button.dataset.contentFilter || 'all';
-      const active = type === state.contentFilter;
-
-      // Replace the entire visual state so inactive colors cannot accumulate.
-      button.className = 'content-filter-btn rounded-full border px-3 py-1.5 font-medium transition ' + (
-        active
-          ? 'border-nox-accent bg-nox-accent text-nox-bg'
-          : 'border-nox-border bg-transparent text-nox-muted hover:border-white/30 hover:text-white'
-      );
-      button.setAttribute('aria-pressed', String(active));
-    });
+  function getProductEdition(product) {
+    // An upgrade/DLC is not a full-game edition, even when it says Deluxe.
+    if (isDlcProduct(product)) return 'dlc';
+    const title = String(product?.name || '').normalize('NFKC');
+    if (/выбор\s+издани|выберите\s+издани|(?:standard|deluxe|premium|gold|ultimate)\s*[\/|+]\s*(?:standard|deluxe|premium|gold|ultimate)/i.test(title)) return 'choice';
+    if (/\bdeluxe\b|делюкс/iu.test(title)) return 'deluxe';
+    if (/\bpremium\b|премиум/iu.test(title)) return 'premium';
+    if (/\bultimate\b|ультимейт/iu.test(title)) return 'ultimate';
+    if (/\bgold(?:\s+edition)?\b|золотое\s+издание/iu.test(title)) return 'gold';
+    if (/\b(?:complete|goty|collector[’']?s?|anniversary|special|divine|eternal)\s+edition\b|\bgoty\b|game\s+of\s+the\s+year|полное\s+издание/iu.test(title)) return 'other';
+    // Definitive/Enhanced/Remastered can name the base release itself.
+    if (/\bstandard\b|(?:definitive|enhanced)\s+edition|базов(?:ое|ая)|стандартн(?:ое|ая)/iu.test(title)) return 'standard';
+    return 'unspecified';
   }
 
-  contentFilterStrip.querySelectorAll('[data-content-filter]').forEach(button => {
-    button.addEventListener('click', () => {
-      state.contentFilter = button.dataset.contentFilter || 'all';
-      state.page = 1;
-      renderContentFilter();
-      applyAndRender();
-    });
+  function renderEditionFilter() {
+    const visible = shouldShowEditionFilter();
+    // Keep the label's space even in categories that do not use editions.
+    editionFilterWrap.style.visibility = visible ? 'visible' : 'hidden';
+    editionFilterWrap.setAttribute('aria-hidden', String(!visible));
+    editionFilterSelect.tabIndex = visible ? 0 : -1;
+    const available = new Set(state.rawProducts.map(getProductEdition));
+    if (!visible || !available.has(state.editionFilter)) state.editionFilter = 'all';
+    editionFilterSelect.innerHTML = '<option value="all">Все издания</option>' +
+      EDITION_OPTIONS.filter(([value]) => available.has(value)).map(([value, label]) =>
+        `<option value="${value}">${label}</option>`).join('');
+    editionFilterSelect.value = state.editionFilter;
+  }
+
+  editionFilterSelect.addEventListener('change', () => {
+    state.editionFilter = editionFilterSelect.value;
+    state.page = 1;
+    applyAndRender();
   });
 
   function inferDeliveryType(product) {
