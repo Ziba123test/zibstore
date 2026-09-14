@@ -188,6 +188,11 @@ function editionInfo(value) {
     ['collector', /\bcollector'?s?\b/i],
     ['definitive', /\bdefinitive\b/i],
     ['anniversary', /\banniversary\b/i],
+    ['goty', /\bgoty\b|\bgame\s+of\s+the\s+year\b/i],
+    ['special', /\bspecial(?:\s+edition)?\b/i],
+    ['limited', /\blimited(?:\s+edition)?\b/i],
+    ['divine', /\bdivine(?:\s+edition)?\b/i],
+    ['eternal', /\beternal(?:\s+edition)?\b/i],
     ['bundle', /\bbundle\b/i],
     ['standard', /\bstandard(?:\s+edition)?\b/i]
   ];
@@ -197,7 +202,8 @@ function editionInfo(value) {
 
 function baseGameTitle(value) {
   return cleanSalesTitle(value)
-    .replace(/\b(?:premium|deluxe|ultimate|gold|complete|collector'?s?|definitive|anniversary|bundle)(?:\s+edition)?\b/gi, ' ')
+    .replace(/\bgame\s+of\s+the\s+year\b/gi, ' ')
+    .replace(/\b(?:premium|deluxe|ultimate|gold|complete|collector'?s?|definitive|anniversary|goty|special|limited|divine|eternal|bundle)(?:\s+edition)?\b/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -379,6 +385,306 @@ async function steamStoreSearch(term) {
 }
 
 
+async function getSteamAppDetails(appId, filters = '') {
+  appId = String(appId || '').trim();
+  if (!/^\d+$/.test(appId)) return null;
+
+  const suffix = filters ? `&filters=${encodeURIComponent(filters)}` : '';
+  for (const cc of ['us', 'kz', 'ru']) {
+    try {
+      const data = await fetchJson(
+        `https://store.steampowered.com/api/appdetails?appids=${appId}&cc=${cc}&l=english${suffix}`
+      );
+      const entry = data?.[appId];
+      if (entry?.success && entry?.data) return entry.data;
+    } catch (_) {}
+  }
+
+  return null;
+}
+
+async function getSteamPackageDetails(packageId) {
+  packageId = String(packageId || '').trim();
+  if (!/^\d+$/.test(packageId)) return null;
+
+  for (const cc of ['us', 'kz', 'ru']) {
+    try {
+      const data = await fetchJson(
+        `https://store.steampowered.com/api/packagedetails?packageids=${packageId}&cc=${cc}&l=english`
+      );
+      const entry = data?.[packageId];
+      if (entry?.success && entry?.data) return entry.data;
+    } catch (_) {}
+  }
+
+  return null;
+}
+
+function steamPackageApps(data) {
+  return (Array.isArray(data?.apps) ? data.apps : [])
+    .map(x => ({
+      id: String(x?.id ?? x?.appid ?? '').trim(),
+      name: String(x?.name || '').trim()
+    }))
+    .filter(x => /^\d+$/.test(x.id));
+}
+
+function bestPackageCoverAppId(productTitle, apps, fallbackAppId = '') {
+  const list = Array.isArray(apps) ? apps : [];
+  if (!list.length) return /^\d+$/.test(String(fallbackAppId || '')) ? String(fallbackAppId) : '';
+
+  const ranked = list
+    .map(app => ({
+      ...app,
+      exactBase: baseGameTitle(productTitle) === baseGameTitle(app.name),
+      score: titleSimilarity(productTitle, app.name)
+    }))
+    .sort((a, b) => {
+      if (a.exactBase !== b.exactBase) return a.exactBase ? -1 : 1;
+      return b.score - a.score;
+    });
+
+  const best = ranked[0];
+  if (best && (best.exactBase || best.score >= 0.90)) return best.id;
+  if (/^\d+$/.test(String(fallbackAppId || ''))) return String(fallbackAppId);
+  return best?.id || '';
+}
+
+async function findSteamBaseAppCandidate(product) {
+  const query = baseGameTitle(product?.name);
+  if (!query || query.length < 3) return null;
+
+  const items = await steamStoreSearch(query);
+  const scored = [];
+
+  for (const item of items.slice(0, 12)) {
+    if (!item?.id || !item?.name) continue;
+    const sellerBase = baseGameTitle(product.name);
+    const steamBase = baseGameTitle(item.name);
+    const softBaseAlias =
+      steamBase === `${sellerBase} enhanced` ||
+      sellerBase === `${steamBase} enhanced`;
+    const exactBase = sellerBase === steamBase || softBaseAlias;
+    const score = exactBase ? 1 : titleSimilarity(product.name, item.name);
+    if (!exactBase && score < 0.94) continue;
+    scored.push({ item, exactBase, softBaseAlias, score });
+  }
+
+  scored.sort((a, b) => {
+    if (a.exactBase !== b.exactBase) return a.exactBase ? -1 : 1;
+    return b.score - a.score;
+  });
+
+  const best = scored[0];
+  const second = scored[1];
+  if (!best) return null;
+
+  const exactCount = scored.filter(x => x.exactBase).length;
+  const clear = best.exactBase
+    ? exactCount === 1 || scored.filter(x => x.exactBase).every(x => String(x.item.id) === String(best.item.id))
+    : best.score >= 0.985 && (best.score - (second?.score || 0)) >= 0.10;
+
+  return {
+    appId: String(best.item.id),
+    name: String(best.item.name),
+    score: Math.round(best.score * 1000) / 1000,
+    exactBase: best.exactBase,
+    clear,
+    query
+  };
+}
+
+async function discoverEditionPackageCandidates(product, baseApp) {
+  const wantedEdition = editionInfo(product?.name);
+  if (!wantedEdition.tag || wantedEdition.tag === 'standard') return [];
+  if (!baseApp?.appId) return [];
+
+  let appDetails = await getSteamAppDetails(baseApp.appId, 'packages');
+  if (!appDetails) return [];
+
+  const filteredHasPackages =
+    (Array.isArray(appDetails.packages) && appDetails.packages.length) ||
+    (Array.isArray(appDetails.package_groups) && appDetails.package_groups.length);
+  if (!filteredHasPackages) {
+    appDetails = await getSteamAppDetails(baseApp.appId) || appDetails;
+  }
+
+  const hints = new Map();
+  for (const group of Array.isArray(appDetails.package_groups) ? appDetails.package_groups : []) {
+    for (const sub of Array.isArray(group?.subs) ? group.subs : []) {
+      const id = String(sub?.packageid || '').trim();
+      if (!/^\d+$/.test(id)) continue;
+      hints.set(id, {
+        optionText: String(sub?.option_text || '').trim(),
+        optionDescription: String(sub?.option_description || '').trim()
+      });
+    }
+  }
+
+  const packageIds = [];
+  const pushId = id => {
+    id = String(id || '').trim();
+    if (/^\d+$/.test(id) && !packageIds.includes(id)) packageIds.push(id);
+  };
+  for (const id of Array.isArray(appDetails.packages) ? appDetails.packages : []) pushId(id);
+  for (const id of hints.keys()) pushId(id);
+
+  // Keep requests bounded. Matching edition labels from package_groups are checked first.
+  packageIds.sort((a, b) => {
+    const aa = `${hints.get(a)?.optionText || ''} ${hints.get(a)?.optionDescription || ''}`;
+    const bb = `${hints.get(b)?.optionText || ''} ${hints.get(b)?.optionDescription || ''}`;
+    const am = editionInfo(aa).tag === wantedEdition.tag ? 1 : 0;
+    const bm = editionInfo(bb).tag === wantedEdition.tag ? 1 : 0;
+    return bm - am;
+  });
+
+  const candidates = [];
+  for (const packageId of packageIds.slice(0, 18)) {
+    const details = await getSteamPackageDetails(packageId);
+    if (!details) continue;
+
+    const apps = steamPackageApps(details);
+    const containsBaseApp = apps.some(x => x.id === String(baseApp.appId));
+    if (!containsBaseApp) continue;
+
+    const hint = hints.get(packageId) || {};
+    const name = String(details.name || '').trim();
+    const label = `${name} ${hint.optionText || ''} ${hint.optionDescription || ''}`.trim();
+    const packageEdition = editionInfo(label);
+    const editionMatch = packageEdition.tag === wantedEdition.tag;
+    const exactBase = baseGameTitle(product.name) === baseGameTitle(name || hint.optionText || '');
+    const score = exactBase ? 1 : titleSimilarity(product.name, name || hint.optionText || '');
+    const suspicious = /(?:upgrade|soundtrack|commercial\s+license|season\s+pass)/i.test(label);
+    const coverAppId = bestPackageCoverAppId(product.name, apps, baseApp.appId);
+
+    candidates.push({
+      type: 'package',
+      steamId: packageId,
+      name: name || hint.optionText || `Package ${packageId}`,
+      optionText: hint.optionText || '',
+      apps,
+      containsBaseApp,
+      coverAppId,
+      edition: packageEdition,
+      editionMatch,
+      exactBase,
+      suspicious,
+      score: Math.round(score * 1000) / 1000,
+      confidence: editionMatch && exactBase && !suspicious ? 1 : Math.round(score * 1000) / 1000
+    });
+  }
+
+  return candidates.sort((a, b) => {
+    if (a.editionMatch !== b.editionMatch) return a.editionMatch ? -1 : 1;
+    if (a.suspicious !== b.suspicious) return a.suspicious ? 1 : -1;
+    if (a.exactBase !== b.exactBase) return a.exactBase ? -1 : 1;
+    return b.score - a.score;
+  });
+}
+
+async function matchEditionPackageFromSteam(product) {
+  const edition = editionInfo(product?.name);
+  if (!edition.tag || edition.tag === 'standard' || edition.flexible) return null;
+
+  const baseApp = await findSteamBaseAppCandidate(product);
+  if (!baseApp?.clear) return null;
+
+  const candidates = await discoverEditionPackageCandidates(product, baseApp);
+  const valid = candidates.filter(x => x.editionMatch && x.exactBase && !x.suspicious);
+  if (!valid.length) return null;
+
+  // Automatic binding is allowed only when one clearly best package remains.
+  const top = valid[0];
+  const second = valid[1];
+  if (second && second.confidence >= top.confidence - 0.02) return null;
+
+  return {
+    type: 'package',
+    steamId: String(top.steamId),
+    title: String(product.name || top.name),
+    region: 'ru',
+    savedAt: new Date().toISOString(),
+    coverMode: 'steam',
+    coverAppId: String(top.coverAppId || baseApp.appId),
+    autoMatched: true,
+    matchSource: 'steam-package-edition',
+    steamSearchName: String(top.name),
+    steamBaseAppId: String(baseApp.appId),
+    steamBaseAppName: String(baseApp.name),
+    packageEdition: edition.tag,
+    matchConfidence: 1
+  };
+}
+
+async function adminSteamCandidates(product) {
+  const dlcProduct = isDlcDigisellerProduct(product);
+  const edition = editionInfo(product?.name);
+
+  if (!dlcProduct && edition.tag && edition.tag !== 'standard' && !edition.flexible) {
+    const baseApp = await findSteamBaseAppCandidate(product);
+    const packages = baseApp ? await discoverEditionPackageCandidates(product, baseApp) : [];
+    return {
+      mode: 'edition-package',
+      query: baseApp?.query || baseGameTitle(product.name),
+      baseApp,
+      candidates: packages.slice(0, 8)
+    };
+  }
+
+  const query = dlcProduct ? cleanSalesTitle(product.name) : baseGameTitle(product.name);
+  const items = await steamStoreSearch(query);
+  const candidates = items.slice(0, 8).map(item => {
+    const score = dlcProduct
+      ? (cleanSalesTitle(product.name) === cleanSalesTitle(item.name) ? 1 : titleSimilarity(product.name, item.name))
+      : (baseGameTitle(product.name) === baseGameTitle(item.name) ? 1 : titleSimilarity(product.name, item.name));
+    return {
+      type: 'app',
+      steamId: String(item.id),
+      name: String(item.name || ''),
+      score: Math.round(score * 1000) / 1000,
+      confidence: Math.round(score * 1000) / 1000
+    };
+  });
+
+  return { mode: 'app', query, baseApp: null, candidates };
+}
+
+async function inspectSteamTarget(product, steamType, steamId, requestedCoverAppId = '') {
+  steamType = steamType === 'package' ? 'package' : 'app';
+  steamId = String(steamId || '').trim();
+  if (!/^\d+$/.test(steamId)) throw new Error('Steam ID должен быть числом');
+
+  if (steamType === 'app') {
+    const details = await getSteamAppDetails(steamId);
+    if (!details) throw new Error('Steam AppID не найден');
+    return {
+      type: 'app',
+      steamId,
+      name: String(details.name || `App ${steamId}`),
+      storeType: String(details.type || ''),
+      url: `https://store.steampowered.com/app/${steamId}/`,
+      coverAppId: ''
+    };
+  }
+
+  const details = await getSteamPackageDetails(steamId);
+  if (!details) throw new Error('Steam Package/SubID не найден');
+  const apps = steamPackageApps(details);
+  const requested = String(requestedCoverAppId || '').trim();
+  const coverAppId = /^\d+$/.test(requested)
+    ? requested
+    : bestPackageCoverAppId(product?.name || '', apps, '');
+
+  return {
+    type: 'package',
+    steamId,
+    name: String(details.name || `Package ${steamId}`),
+    url: `https://store.steampowered.com/sub/${steamId}/`,
+    apps,
+    coverAppId
+  };
+}
+
 async function getSteamAppStoreType(appId) {
   appId = String(appId || '').trim();
   if (!/^\d+$/.test(appId)) return null;
@@ -435,7 +741,9 @@ async function matchFromSteamSearch(product) {
   // For ordinary full games, a paid edition/package still requires conservative
   // matching. For DLC this restriction would incorrectly block products such as
   // "Deluxe Pack", which are themselves separate Steam DLC apps.
-  if (!dlcProduct && currentEdition.tag && currentEdition.tag !== 'standard') return null;
+  if (!dlcProduct && currentEdition.tag && currentEdition.tag !== 'standard') {
+    return matchEditionPackageFromSteam(product);
+  }
 
   // DLC titles should keep words such as "Deluxe"/"Premium" because they may be
   // the actual DLC name. We only remove seller noise (DLC, Gift, regions, etc.).
@@ -571,6 +879,7 @@ async function runAutomaticMatchSync(force = false) {
       alreadyMatched: 0,
       inherited: 0,
       steamSearchMatched: 0,
+      steamPackageMatched: 0,
       ignored: [],
       unresolved: [],
       errors: []
@@ -617,7 +926,8 @@ async function runAutomaticMatchSync(force = false) {
           if (steam) {
             matches[productId] = steam;
             changed = true;
-            report.steamSearchMatched++;
+            if (steam.type === 'package') report.steamPackageMatched++;
+            else report.steamSearchMatched++;
             continue;
           }
         }
@@ -646,6 +956,7 @@ async function runAutomaticMatchSync(force = false) {
         alreadyMatched: report.alreadyMatched,
         inherited: report.inherited,
         steamSearchMatched: report.steamSearchMatched,
+        steamPackageMatched: report.steamPackageMatched,
         ignored: report.ignored.length,
         unresolved: report.unresolved.length
       }));
@@ -2117,6 +2428,7 @@ const server = http.createServer(async (req, res) => {
         lastSyncAt: autoMatchLastSyncAt || null,
         inherited: Number(sync?.inherited || 0),
         steamSearchMatched: Number(sync?.steamSearchMatched || 0),
+        steamPackageMatched: Number(sync?.steamPackageMatched || 0),
         ignored: Array.isArray(sync?.ignored) ? sync.ignored.length : 0,
         unresolved: Array.isArray(sync?.unresolved) ? sync.unresolved.length : 0
       }
@@ -2125,6 +2437,98 @@ const server = http.createServer(async (req, res) => {
 
 
 
+
+  if (url.pathname === '/api/admin/steam-match-candidates' && req.method === 'GET') {
+    if (!requireAdmin(req, res)) return;
+
+    try {
+      const productId = String(url.searchParams.get('productId') || '').trim();
+      if (!productId) return adminJson(res, 400, { ok: false, error: 'productId is required' });
+
+      const catalog = await fetchDigisellerCatalog();
+      const product = catalog.find(x => String(x.id) === productId);
+      if (!product) return adminJson(res, 404, { ok: false, error: 'Digiseller product not found' });
+
+      const found = await adminSteamCandidates(product);
+      return adminJson(res, 200, {
+        ok: true,
+        productId,
+        productName: product.name,
+        normalizedName: isDlcDigisellerProduct(product) ? cleanSalesTitle(product.name) : baseGameTitle(product.name),
+        edition: editionInfo(product.name),
+        ...found
+      });
+    } catch (err) {
+      return adminJson(res, 502, { ok: false, error: err.message });
+    }
+  }
+
+  if (url.pathname === '/api/admin/inspect-steam-target' && req.method === 'GET') {
+    if (!requireAdmin(req, res)) return;
+
+    try {
+      const productId = String(url.searchParams.get('productId') || '').trim();
+      const steamType = String(url.searchParams.get('steamType') || '').trim();
+      const steamId = String(url.searchParams.get('steamId') || '').trim();
+      const coverAppId = String(url.searchParams.get('coverAppId') || '').trim();
+      if (!productId) return adminJson(res, 400, { ok: false, error: 'productId is required' });
+      if (!['app', 'package'].includes(steamType)) {
+        return adminJson(res, 400, { ok: false, error: 'steamType must be app or package' });
+      }
+
+      const catalog = await fetchDigisellerCatalog();
+      const product = catalog.find(x => String(x.id) === productId);
+      if (!product) return adminJson(res, 404, { ok: false, error: 'Digiseller product not found' });
+
+      const target = await inspectSteamTarget(product, steamType, steamId, coverAppId);
+      return adminJson(res, 200, { ok: true, productId, target });
+    } catch (err) {
+      return adminJson(res, 400, { ok: false, error: err.message });
+    }
+  }
+
+  if (url.pathname === '/api/admin/set-steam-match' && req.method === 'POST') {
+    if (!requireAdmin(req, res)) return;
+
+    try {
+      const body = await readJsonBody(req, 64 * 1024);
+      const productId = String(body.productId || '').trim();
+      const steamType = String(body.steamType || '').trim();
+      const steamId = String(body.steamId || '').trim();
+      const coverAppId = String(body.coverAppId || '').trim();
+
+      if (!productId || !steamId || !['app', 'package'].includes(steamType)) {
+        return adminJson(res, 400, { ok: false, error: 'productId, steamType=app|package and steamId are required' });
+      }
+
+      const catalog = await fetchDigisellerCatalog();
+      const product = catalog.find(x => String(x.id) === productId);
+      if (!product) return adminJson(res, 404, { ok: false, error: 'Digiseller product not found' });
+
+      const target = await inspectSteamTarget(product, steamType, steamId, coverAppId);
+      const matches = readSteamMatchesFile();
+      matches[productId] = {
+        type: target.type,
+        steamId: String(target.steamId),
+        title: String(product.name || target.name || ''),
+        region: 'ru',
+        savedAt: new Date().toISOString(),
+        coverMode: 'steam',
+        ...(target.type === 'package' && target.coverAppId ? { coverAppId: String(target.coverAppId) } : {}),
+        autoMatched: false,
+        matchSource: 'admin-manual-steam-id',
+        steamSearchName: String(target.name || ''),
+        matchConfidence: 1
+      };
+
+      writeSteamMatchesFile(matches);
+      autoMatchLastSyncAt = 0;
+
+      return adminJson(res, 200, { ok: true, productId, item: matches[productId], target });
+    } catch (err) {
+      return adminJson(res, 400, { ok: false, error: err.message });
+    }
+  }
 
   if (url.pathname === '/api/admin/apply-match-candidate' && req.method === 'POST') {
     if (!requireAdmin(req, res)) return;
