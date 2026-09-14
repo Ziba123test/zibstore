@@ -887,9 +887,15 @@ function stripSteamHtml(value) {
 
 function steamLanguageCellChecked(cellHtml) {
   const cell = String(cellHtml || '');
+
+  // Steam most commonly renders supported language cells as an image:
+  // <img .../ico_bluecheck.png>
+  // Some layouts / mirrors expose a text checkmark or a check CSS class instead.
   return (
+    /\bico_bluecheck(?:\.png)?\b/i.test(cell) ||
+    /\bbluecheck(?:\.png)?\b/i.test(cell) ||
     /\bcheckmark\b/i.test(cell) ||
-    /(?:&#10003;|&#x2713;|✓)/i.test(cell) ||
+    /(?:&#10003;|&#x2713;|&#x2714;|✓|✔)/i.test(cell) ||
     /(?:icon_check|ico_check)/i.test(cell)
   );
 }
