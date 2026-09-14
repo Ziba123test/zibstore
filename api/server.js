@@ -152,7 +152,9 @@ function cleanSalesTitle(value) {
 
   const noiseTokens = new Set([
     'steam','gift','key','auto','autodelivery',
+    'dlc','addon','add-on','expansion',
     'авто','автодоставка','ключ','гифт','подарок','бонус',
+    'дополнение','дополнения','доп',
     'россия','мир','снг','рф','ру','уа',
     'ru','rf','ua','by','kz','tr','ar','cis',
     'кз','тр','ар',
@@ -236,6 +238,25 @@ function editionsCompatible(currentTitle, knownTitle) {
   return a.tag === b.tag;
 }
 
+
+
+function isDlcDigisellerProduct(product) {
+  const category = String(product?.categoryName || product?._categoryName || '')
+    .normalize('NFKC')
+    .toLowerCase();
+  const name = String(product?.name || '')
+    .normalize('NFKC')
+    .toLowerCase();
+
+  return (
+    /дополн/iu.test(category) ||
+    /\bdlc\b/i.test(category) ||
+    /\badd[\s-]?on\b/i.test(category) ||
+    /\bexpansion\b/i.test(category) ||
+    /^\s*dlc(?:\s|:|-)/i.test(name) ||
+    /\bdownloadable\s+content\b/i.test(name)
+  );
+}
 
 function shouldIgnoreDigisellerProduct(product) {
   const raw = String(product?.name || '').normalize('NFKC').toLowerCase();
@@ -345,14 +366,71 @@ async function steamStoreSearch(term) {
   }
 }
 
+
+async function getSteamAppStoreType(appId) {
+  appId = String(appId || '').trim();
+  if (!/^\d+$/.test(appId)) return null;
+
+  for (const cc of ['us', 'kz', 'ru']) {
+    try {
+      const data = await fetchJson(
+        `https://store.steampowered.com/api/appdetails?appids=${appId}&cc=${cc}&l=english&filters=basic`
+      );
+      const entry = data?.[appId];
+      if (entry?.success && entry?.data) {
+        return String(entry.data.type || '').toLowerCase() || null;
+      }
+    } catch (_) {}
+  }
+
+  return null;
+}
+
+
+function standardEditionStoreAliasMatch(productTitle, steamTitle) {
+  const edition = editionInfo(productTitle);
+  if (edition.tag !== 'standard') return false;
+
+  const sellerBase = baseGameTitle(productTitle);
+  const steamBase = baseGameTitle(steamTitle);
+
+  if (!sellerBase || !steamBase) return false;
+  if (sellerBase === steamBase) return true;
+
+  // Steam sometimes renames the base app with a non-commercial descriptor
+  // while sellers still call the purchased SKU "Standard Edition".
+  //
+  // Example:
+  //   seller: "CRIMSON DESERT Standard Edition"
+  //   Steam:  "Crimson Desert Enhanced"
+  //
+  // We only allow a single soft suffix and only when the seller explicitly
+  // says Standard Edition. Deluxe/Premium/etc. are never accepted this way.
+  const softSuffixes = ['enhanced'];
+
+  for (const suffix of softSuffixes) {
+    if (steamBase === `${sellerBase} ${suffix}`) return true;
+    if (sellerBase === `${steamBase} ${suffix}`) return true;
+  }
+
+  return false;
+}
+
 async function matchFromSteamSearch(product) {
+  const dlcProduct = isDlcDigisellerProduct(product);
   const currentEdition = editionInfo(product.name);
 
-  // A new paid edition/package cannot safely be inferred from a base app.
-  // Seller changes are still automated through historical matches above.
-  if (currentEdition.tag && currentEdition.tag !== 'standard') return null;
+  // For ordinary full games, a paid edition/package still requires conservative
+  // matching. For DLC this restriction would incorrectly block products such as
+  // "Deluxe Pack", which are themselves separate Steam DLC apps.
+  if (!dlcProduct && currentEdition.tag && currentEdition.tag !== 'standard') return null;
 
-  const query = baseGameTitle(product.name);
+  // DLC titles should keep words such as "Deluxe"/"Premium" because they may be
+  // the actual DLC name. We only remove seller noise (DLC, Gift, regions, etc.).
+  const query = dlcProduct
+    ? cleanSalesTitle(product.name)
+    : baseGameTitle(product.name);
+
   if (!query || query.length < 3) return null;
 
   const items = await steamStoreSearch(query);
@@ -361,15 +439,39 @@ async function matchFromSteamSearch(product) {
   for (const item of items.slice(0, 12)) {
     if (!item?.id || !item?.name) continue;
 
-    const score = titleSimilarity(product.name, item.name);
-    const exactBase = baseGameTitle(product.name) === baseGameTitle(item.name);
-    if (!exactBase && score < 0.97) continue;
+    const currentNormalized = dlcProduct
+      ? cleanSalesTitle(product.name)
+      : baseGameTitle(product.name);
+    const itemNormalized = dlcProduct
+      ? cleanSalesTitle(item.name)
+      : baseGameTitle(item.name);
 
-    scored.push({ item, score, exactBase });
+    const exactBase = currentNormalized === itemNormalized;
+    const standardAlias =
+      !dlcProduct &&
+      standardEditionStoreAliasMatch(product.name, item.name);
+
+    const score = (exactBase || standardAlias)
+      ? 1
+      : titleSimilarity(product.name, item.name);
+
+    if (!exactBase && !standardAlias && score < 0.97) continue;
+
+    // A product from the "Дополнения Steam" category must resolve to an actual
+    // Steam DLC app, never silently to the parent/base game.
+    if (dlcProduct) {
+      const steamType = await getSteamAppStoreType(item.id);
+      if (steamType && steamType !== 'dlc') continue;
+      if (!steamType && !exactBase) continue;
+    }
+
+    scored.push({ item, score, exactBase, standardAlias });
   }
 
   scored.sort((a, b) => {
-    if (a.exactBase !== b.exactBase) return a.exactBase ? -1 : 1;
+    const aExact = a.exactBase || a.standardAlias;
+    const bExact = b.exactBase || b.standardAlias;
+    if (aExact !== bExact) return aExact ? -1 : 1;
     return b.score - a.score;
   });
 
@@ -377,7 +479,7 @@ async function matchFromSteamSearch(product) {
   const second = scored[1];
   if (!best) return null;
 
-  if (!best.exactBase) {
+  if (!best.exactBase && !best.standardAlias) {
     const margin = best.score - (second?.score || 0);
     if (best.score < 0.985 || margin < 0.10) return null;
   }
@@ -390,9 +492,17 @@ async function matchFromSteamSearch(product) {
     savedAt: new Date().toISOString(),
     coverMode: 'steam',
     autoMatched: true,
-    matchSource: 'steam-search',
+    matchSource: dlcProduct
+      ? 'steam-search-dlc'
+      : best.standardAlias
+        ? 'steam-search-standard-alias'
+        : 'steam-search',
     steamSearchName: String(best.item.name),
-    matchConfidence: best.exactBase ? 1 : Math.round(best.score * 1000) / 1000
+    steamProductType: dlcProduct ? 'dlc' : 'app',
+    categoryName: String(product.categoryName || ''),
+    matchConfidence: (best.exactBase || best.standardAlias)
+      ? 1
+      : Math.round(best.score * 1000) / 1000
   };
 }
 
@@ -419,7 +529,12 @@ async function fetchDigisellerCatalog() {
         const id = String(p?.id || '').trim();
         if (!id || seen.has(id)) continue;
         seen.add(id);
-        all.push({ id, name: String(p?.name || '') });
+        all.push({
+          id,
+          name: String(p?.name || ''),
+          categoryId: String(category.id),
+          categoryName: String(category.name || '')
+        });
       }
     } catch (err) {
       console.warn('Digiseller category sync failed:', category.id, err.message);
@@ -498,7 +613,11 @@ async function runAutomaticMatchSync(force = false) {
         report.unresolved.push({
           productId,
           name: product.name,
-          normalizedName: baseGameTitle(product.name),
+          categoryName: String(product.categoryName || ''),
+          isDlc: isDlcDigisellerProduct(product),
+          normalizedName: isDlcDigisellerProduct(product)
+            ? cleanSalesTitle(product.name)
+            : baseGameTitle(product.name),
           edition: editionInfo(product.name),
           reason: steamSearches >= AUTO_MATCH_MAX_STEAM_SEARCHES ? 'search_limit' : 'low_confidence',
           candidates: historicalCandidates(product, matches, 5)
