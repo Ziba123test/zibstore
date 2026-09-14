@@ -77,6 +77,14 @@ async function fetchText(url, timeoutMs = 12000) {
 
 function decodeHtmlAttr(value) {
   return String(value || '')
+    .replace(/&#x([0-9a-f]+);?/gi, (_, hex) => {
+      try { return String.fromCodePoint(parseInt(hex, 16)); }
+      catch (_) { return _; }
+    })
+    .replace(/&#([0-9]+);?/g, (_, dec) => {
+      try { return String.fromCodePoint(parseInt(dec, 10)); }
+      catch (_) { return _; }
+    })
     .replace(/&amp;/g, '&')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
@@ -887,16 +895,27 @@ function stripSteamHtml(value) {
 
 function steamLanguageCellChecked(cellHtml) {
   const cell = String(cellHtml || '');
+  const decoded = decodeHtmlAttr(cell);
 
-  // Steam most commonly renders supported language cells as an image:
-  // <img .../ico_bluecheck.png>
-  // Some layouts / mirrors expose a text checkmark or a check CSS class instead.
+  // Steam has used several representations over the years:
+  // - &#10004; / ✔
+  // - &#10003; / ✓
+  // - <span>✔</span>
+  // - <span class="checkmark"></span>
+  // - <img ...ico_bluecheck.png>
+  //
+  // This function is called only for the three language "checkcol" cells,
+  // so a span/img inside one of these cells is itself a strong checked signal.
   return (
+    /[✓✔]/.test(decoded) ||
+    /&#(?:10003|10004);?/i.test(cell) ||
+    /&#x(?:2713|2714);?/i.test(cell) ||
     /\bico_bluecheck(?:\.png)?\b/i.test(cell) ||
     /\bbluecheck(?:\.png)?\b/i.test(cell) ||
     /\bcheckmark\b/i.test(cell) ||
-    /(?:&#10003;|&#x2713;|&#x2714;|✓|✔)/i.test(cell) ||
-    /(?:icon_check|ico_check)/i.test(cell)
+    /(?:icon_check|ico_check)/i.test(cell) ||
+    /<span\b[^>]*>/i.test(cell) ||
+    /<img\b[^>]*>/i.test(cell)
   );
 }
 
