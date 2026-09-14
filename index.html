@@ -1203,13 +1203,29 @@ function hasDlcTitleLabel(title) {
     return '';
   }
 
+  function isExpandedEdition(product) {
+    // Filter semantics are intentionally broader than badge semantics:
+    // special editions and named collections count as "Расширенное" without
+    // receiving their own badge or a new dedicated dropdown option.
+    if (isDlcProduct(product)) return false;
+
+    const edition = getProductEdition(product);
+    if (EDITION_OPTIONS.some(([value]) => value === edition)) return true;
+
+    const title = String(product?.name || '').normalize('NFKC');
+
+    return /\bdefinitive(?:\s+edition)?\b/i.test(title)
+      || /\bcommander(?:\s+edition)?\b/i.test(title)
+      || /\b(?:trilogy|collection|anthology|compilation)\b/i.test(title)
+      || /\bfranchise\s+pack\b/i.test(title)
+      || /\bbundle\b/i.test(title);
+  }
+
   function matchesEditionFilter(product, filter) {
     const edition = getProductEdition(product);
     if (filter === 'all') return true;
-    if (filter === 'expanded') return EDITION_OPTIONS.some(([value]) => value === edition);
-    if (filter === 'no-expanded') {
-      return !EDITION_OPTIONS.some(([value]) => value === edition);
-    }
+    if (filter === 'expanded') return isExpandedEdition(product);
+    if (filter === 'no-expanded') return !isExpandedEdition(product);
     return edition === filter;
   }
 
