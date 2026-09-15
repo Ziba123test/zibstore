@@ -266,11 +266,41 @@ function editionsCompatible(currentTitle, knownTitle) {
   return a.tag === b.tag;
 }
 
+function titleInitialismAlias(a, b) {
+  const A = String(a || '').split(/\s+/).filter(Boolean);
+  const B = String(b || '').split(/\s+/).filter(Boolean);
+  if (!A.length || !B.length) return false;
+
+  let shared = 0;
+  while (shared < A.length && shared < B.length && A[shared] === B[shared]) shared++;
+
+  // Require a real shared franchise/base prefix. This keeps the alias narrow and
+  // prevents unrelated short acronyms from matching arbitrary titles.
+  if (shared < 1) return false;
+
+  const left = A.slice(shared);
+  const right = B.slice(shared);
+
+  const matches = (words, acronymTokens) => {
+    if (words.length < 2 || acronymTokens.length !== 1) return false;
+    const acronym = acronymTokens[0];
+    if (!/^[a-z0-9]{2,8}$/i.test(acronym)) return false;
+    const initialism = words.map(word => word[0] || '').join('');
+    return initialism === acronym;
+  };
+
+  return matches(left, right) || matches(right, left);
+}
+
 function baseTitlesEquivalent(a, b) {
   const aa = canonicalBaseGameTitle(a);
   const bb = canonicalBaseGameTitle(b);
   if (!aa || !bb) return false;
   if (aa === bb) return true;
+
+  // Steam occasionally shortens a subtitle to an initialism in package names.
+  // Example: "Onimusha: Way of the Sword" <-> "Onimusha: WotS".
+  if (titleInitialismAlias(aa, bb)) return true;
 
   // Steam occasionally appends a non-commercial descriptor to the base app
   // while sellers keep the cleaner retail title. Treat only known-safe aliases
