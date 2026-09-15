@@ -200,8 +200,9 @@ function cleanSalesTitle(value) {
 function editionInfo(value) {
   const s = String(value || '').toLowerCase();
   const tags = [
-    ['premium', /\bpremium\b/i],
-    ['deluxe', /\bdeluxe\b/i],
+    ['super_deluxe', /\bsuper\s+deluxe\b|\bсупер\s+делюкс\b/i],
+    ['premium', /\bpremium\b|\bпремиум\b/i],
+    ['deluxe', /\bdeluxe\b|\bделюкс\b/i],
     ['ultimate', /\bultimate\b/i],
     ['gold', /\bgold\b/i],
     ['complete', /\bcomplete\b/i],
@@ -224,7 +225,7 @@ function editionInfo(value) {
 function baseGameTitle(value) {
   return cleanSalesTitle(value)
     .replace(/\bgame\s+of\s+the\s+year\b/gi, ' ')
-    .replace(/\b(?:premium|deluxe|ultimate|gold|complete|collector'?s?|definitive|commander|anniversary|goty|special|limited|divine|eternal|bundle)(?:\s+edition)?\b/gi, ' ')
+    .replace(/\b(?:super\s+deluxe|premium|deluxe|ultimate|gold|complete|collector'?s?|definitive|commander|anniversary|goty|special|limited|divine|eternal|bundle)(?:\s+edition)?\b/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -1017,7 +1018,7 @@ function extractSteamAppIdsFromSellerText(...values) {
 }
 
 async function sellerSteamAppCandidates(product) {
-  const productId = String(product?.id || '').trim();
+  const productId = String(product?.sourceProductId || product?.id || '').trim();
   if (!/^\d+$/.test(productId)) return [];
 
   let details;
@@ -1352,7 +1353,25 @@ async function fetchDigisellerCatalog() {
     }
   }
 
-  return all;
+  const expanded = [];
+  for (const product of all) {
+    if (!shouldInspectEditionVariants(product)) {
+      expanded.push(product);
+      continue;
+    }
+
+    try {
+      const raw = await getDigisellerRawProductDetails(product.id, 1);
+      const variants = availableEditionVirtualProducts(product, raw);
+      if (variants.length) expanded.push(...variants);
+      else expanded.push(product);
+    } catch (err) {
+      console.warn('Digiseller edition variant expansion failed:', product.id, err.message);
+      expanded.push(product);
+    }
+  }
+
+  return expanded;
 }
 
 async function runAutomaticMatchSync(force = false) {
@@ -1482,6 +1501,168 @@ async function runAutomaticMatchSync(force = false) {
 }
 
 
+
+function asObjectArray(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object') return [value];
+  return [];
+}
+
+function digisellerOptionId(option) {
+  return String(option?.id ?? option?.name ?? option?.value ?? '').trim();
+}
+
+function digisellerOptionLabel(option) {
+  return String(option?.label ?? option?.text ?? option?.title ?? option?.name ?? '').trim();
+}
+
+function digisellerOptionVariants(option) {
+  const raw = option?.variants;
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  if (Array.isArray(raw.variant)) return raw.variant;
+  if (raw.variant && typeof raw.variant === 'object') return [raw.variant];
+  return [];
+}
+
+function flattenDigisellerOptions(value, out = []) {
+  if (Array.isArray(value)) {
+    for (const item of value) flattenDigisellerOptions(item, out);
+    return out;
+  }
+  if (!value || typeof value !== 'object') return out;
+
+  if (value.variants && digisellerOptionVariants(value).length) out.push(value);
+  for (const child of Object.values(value)) flattenDigisellerOptions(child, out);
+  return out;
+}
+
+function editionTagFromVariantText(value) {
+  const s = String(value || '').toLowerCase();
+  const rules = [
+    ['super_deluxe', /\bsuper\s+deluxe\b|\bсупер\s+делюкс\b/i],
+    ['premium', /\bpremium\b|\bпремиум\b/i],
+    ['deluxe', /\bdeluxe\b|\bделюкс\b/i],
+    ['ultimate', /\bultimate\b|\bультимейт\b/i],
+    ['gold', /\bgold\b|\bзолот/i],
+    ['definitive', /\bdefinitive\b|\bокончательн/i],
+    ['complete', /\bcomplete\b|\bполное\s+издани/i],
+    ['collector', /\bcollector'?s?\b|\bколлекцион/i],
+    ['standard', /\bstandard\b|\bстандарт/i]
+  ];
+  return rules.find(([, re]) => re.test(s))?.[0] || '';
+}
+
+function editionLabelForTag(tag, fallback = '') {
+  const labels = {
+    standard: 'Standard Edition',
+    deluxe: 'Deluxe Edition',
+    super_deluxe: 'Super Deluxe Edition',
+    premium: 'Premium Edition',
+    ultimate: 'Ultimate Edition',
+    gold: 'Gold Edition',
+    definitive: 'Definitive Edition',
+    complete: 'Complete Edition',
+    collector: "Collector's Edition"
+  };
+  return labels[tag] || String(fallback || '').trim() || 'Edition';
+}
+
+function looksLikeEditionOption(option, variants) {
+  const optionText = `${digisellerOptionLabel(option)} ${String(option?.type || '')}`.toLowerCase();
+  const variantsText = variants.map(v => String(v?.text || '')).join(' ').toLowerCase();
+  return /издани|edition|deluxe|premium|ultimate|gold|standard|super\s+deluxe|definitive|complete|commander|collector|goty|game\s+of\s+the\s+year/i
+    .test(`${optionText} ${variantsText}`);
+}
+
+function extractEditionOptions(rawProduct) {
+  return flattenDigisellerOptions(rawProduct?.options || []).map(option => {
+    const variants = digisellerOptionVariants(option).map(variant => ({
+      value: String(variant?.value ?? variant?.id ?? '').trim(),
+      text: String(variant?.text || '').trim(),
+      default: Number(variant?.default || 0),
+      modify: String(variant?.modify || ''),
+      modifyValue: Number(variant?.modify_value ?? 0),
+      modifyType: String(variant?.modify_type || ''),
+      visible: Number(variant?.visible ?? 1),
+      isAvailable: Number(variant?.is_available ?? 1),
+      numInStock: variant?.num_in_stock ?? null,
+      editionTag: editionTagFromVariantText(variant?.text || '')
+    })).filter(v => /^\d+$/.test(v.value));
+
+    return {
+      id: digisellerOptionId(option),
+      label: digisellerOptionLabel(option),
+      type: String(option?.type || ''),
+      required: option?.required ?? null,
+      editionLike: looksLikeEditionOption(option, variants),
+      variants
+    };
+  }).filter(option => option.editionLike && /^\d+$/.test(option.id) && option.variants.length >= 2);
+}
+
+function shouldInspectEditionVariants(product) {
+  const title = String(product?.name || '');
+  return /выбор\s+издани|(?:standard|deluxe|premium|ultimate|gold)\s*[\\/|+]\s*(?:standard|deluxe|premium|ultimate|gold)|издани.*(?:standard|deluxe|premium)|(?:standard|deluxe|premium).*издани/i.test(title);
+}
+
+function virtualVariantProductId(sourceProductId, optionId, variantId) {
+  return `v_${String(sourceProductId)}_${String(optionId)}_${String(variantId)}`;
+}
+
+function buildVirtualVariantTitle(sourceTitle, variant) {
+  const tag = variant?.editionTag || editionTagFromVariantText(variant?.text || '');
+  const label = editionLabelForTag(tag, variant?.text || '');
+  let title = String(sourceTitle || '').normalize('NFKC');
+  let replaced = false;
+
+  title = title.replace(/выбор\s+издания/ig, () => {
+    replaced = true;
+    return label;
+  });
+
+  title = title.replace(
+    /\b(?:standard|deluxe|premium|ultimate|gold)(?:\s*\/\s*(?:standard|deluxe|premium|ultimate|gold)){1,}\b/ig,
+    () => {
+      replaced = true;
+      return label;
+    }
+  );
+
+  if (!replaced) title = `${title} — ${label}`;
+  return title
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+\|/g, ' |')
+    .replace(/\|\s+/g, '| ')
+    .replace(/-\s*\|/g, '|')
+    .trim();
+}
+
+function availableEditionVirtualProducts(product, rawProduct) {
+  const editionOptions = extractEditionOptions(rawProduct);
+  if (editionOptions.length !== 1) return [];
+
+  const option = editionOptions[0];
+  return option.variants
+    .filter(variant => variant.visible !== 0 && variant.isAvailable !== 0)
+    .map(variant => ({
+      ...product,
+      id: virtualVariantProductId(product.id, option.id, variant.value),
+      name: buildVirtualVariantTitle(product.name, variant),
+      sourceProductId: String(product.id),
+      sourceProductName: String(product.name || ''),
+      isEditionVariant: true,
+      editionOptionId: String(option.id),
+      editionOptionLabel: String(option.label || ''),
+      editionVariantId: String(variant.value),
+      editionVariantLabel: String(variant.text || ''),
+      editionVariantTag: String(variant.editionTag || ''),
+      editionVariantModifyValue: Number(variant.modifyValue || 0),
+      editionVariantModifyType: String(variant.modifyType || ''),
+      editionVariantDefault: Boolean(variant.default)
+    }));
+}
+
 function decodeBasicHtmlEntities(value) {
   return String(value || '')
     .replace(/&nbsp;/gi, ' ')
@@ -1521,22 +1702,23 @@ function sellerText(value, maxLength = 14000) {
   return text.slice(0, maxLength);
 }
 
-async function getDigisellerProductDetails(productId) {
+async function getDigisellerRawProductDetails(productId, cache = 1) {
   const id = String(productId || '').trim();
   if (!/^\d+$/.test(id)) throw new Error('Invalid productId');
 
-  // Do not pass seller_id here: Digiseller can then return the actual product
-  // seller name. Category comes from our storefront catalog separately.
   const url =
     `${DIGISELLER_API_BASE}/products/${encodeURIComponent(id)}/data` +
-    `?currency=RUB&lang=ru-RU&format=json&cache=1`;
-
+    `?currency=RUB&lang=ru-RU&format=json&cache=${cache ? 1 : 0}`;
   const data = await fetchJson(url);
   if (Number(data?.retval || 0) !== 0 || !data?.product) {
     throw new Error(data?.retdesc || 'Digiseller product details unavailable');
   }
+  return data.product;
+}
 
-  const p = data.product;
+async function getDigisellerProductDetails(productId) {
+  const id = String(productId || '').trim();
+  const p = await getDigisellerRawProductDetails(id, 1);
   return {
     id: String(p.id || id),
     name: String(p.name || ''),
@@ -1556,7 +1738,8 @@ async function getDigisellerProductDetails(productId) {
       refunds: Number(p.statistics.refunds),
       goodReviews: Number(p.statistics.good_reviews),
       badReviews: Number(p.statistics.bad_reviews)
-    } : null
+    } : null,
+    editionOptions: extractEditionOptions(p)
   };
 }
 
@@ -2684,7 +2867,9 @@ function safeEqualText(a, b) {
 
 function getClientIp(req) {
   const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-  return forwarded || req.socket?.remoteAddress || 'unknown';
+  const raw = forwarded || String(req.socket?.remoteAddress || '').trim();
+  const normalized = raw.replace(/^::ffff:/i, '');
+  return net.isIP(normalized) ? normalized : '';
 }
 
 function cleanupAdminSessions() {
@@ -2815,6 +3000,55 @@ function sanitizeCoverPatch(input = {}) {
   return out;
 }
 
+
+async function createDigisellerPurchaseOption({ productId, optionId, variantId, ip }) {
+  const raw = await getDigisellerRawProductDetails(productId, 0);
+  const editionOptions = extractEditionOptions(raw);
+  const option = editionOptions.find(item => String(item.id) === String(optionId));
+  if (!option) throw new Error('Edition option not found for this product');
+
+  const variant = option.variants.find(item => String(item.value) === String(variantId));
+  if (!variant) throw new Error('Edition variant not found for this product');
+  if (variant.visible === 0 || variant.isAvailable === 0) throw new Error('Selected edition is unavailable');
+
+  const response = await fetch(`${DIGISELLER_API_BASE}/purchases/options`, {
+    method: 'POST',
+    headers: {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+      'User-Agent': 'ZibStore/1.0'
+    },
+    body: JSON.stringify({
+      product_id: Number(productId),
+      options: [{ id: Number(optionId), value: { id: Number(variantId) } }],
+      unit_cnt: 0,
+      lang: 'ru-RU',
+      ip: String(ip || '')
+    })
+  });
+
+  const text = await response.text();
+  let data;
+  try {
+    data = JSON.parse(text.replace(/^\uFEFF/, ''));
+  } catch (_) {
+    throw new Error(`Digiseller returned invalid JSON (HTTP ${response.status})`);
+  }
+  if (!response.ok || Number(data?.retval ?? -1) !== 0 || !Number(data?.id_po)) {
+    throw new Error(data?.retdesc || `Digiseller checkout option failed (HTTP ${response.status})`);
+  }
+
+  return {
+    idPo: String(data.id_po),
+    variant: {
+      id: String(variant.value),
+      text: String(variant.text || ''),
+      modifyValue: Number(variant.modifyValue || 0),
+      modifyType: String(variant.modifyType || '')
+    }
+  };
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') {
     res.writeHead(204, CORS);
@@ -2825,6 +3059,33 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === '/health') {
     return json(res, 200, { ok: true, service: 'zibstore-api' });
+  }
+
+  if (url.pathname === '/api/create-variant-checkout' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req, 32 * 1024);
+      const productId = String(body.productId || '').trim();
+      const optionId = String(body.optionId || '').trim();
+      const variantId = String(body.variantId || '').trim();
+      if (!/^\d+$/.test(productId) || !/^\d+$/.test(optionId) || !/^\d+$/.test(variantId)) {
+        return json(res, 400, { ok: false, error: 'Valid productId, optionId and variantId are required' });
+      }
+
+      const ip = getClientIp(req);
+      if (!ip) return json(res, 400, { ok: false, error: 'Client IP is unavailable' });
+
+      const result = await createDigisellerPurchaseOption({ productId, optionId, variantId, ip });
+      return json(res, 200, {
+        ok: true,
+        productId,
+        optionId,
+        variantId,
+        idPo: result.idPo,
+        variant: result.variant
+      });
+    } catch (err) {
+      return json(res, 502, { ok: false, error: err.message });
+    }
   }
 
   if (url.pathname === '/api/product-reviews' && req.method === 'GET') {
