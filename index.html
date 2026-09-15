@@ -857,16 +857,16 @@
 
       let verdict = '';
       if (storeIsCheaper) {
-        verdict = `<span class="inline-flex whitespace-nowrap items-center rounded-full bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-300">−${absoluteDiff.toLocaleString('ru-RU')} ₽ · ${pct}%</span>`;
+        verdict = `<span class="inline-flex whitespace-nowrap items-center rounded-full bg-emerald-500/10 px-2.5 py-1 text-[11px] font-bold text-emerald-300">−${absoluteDiff.toLocaleString('ru-RU')} ₽ · ${pct}%</span>`;
       } else if (diff > 0) {
-        verdict = `<span class="inline-flex whitespace-nowrap items-center rounded-full bg-amber-500/10 px-2 py-1 text-[10px] font-semibold text-amber-300">Steam −${absoluteDiff.toLocaleString('ru-RU')} ₽ · ${pct}%</span>`;
+        verdict = `<span class="inline-flex whitespace-nowrap items-center rounded-full bg-amber-500/10 px-2.5 py-1 text-[11px] font-bold text-amber-300">Steam −${absoluteDiff.toLocaleString('ru-RU')} ₽ · ${pct}%</span>`;
       } else {
-        verdict = `<span class="inline-flex whitespace-nowrap items-center rounded-full bg-white/5 px-2 py-1 text-[10px] font-semibold text-nox-muted">Цена = Steam</span>`;
+        verdict = `<span class="inline-flex whitespace-nowrap items-center rounded-full bg-white/5 px-2.5 py-1 text-[11px] font-bold text-nox-muted">Цена = Steam</span>`;
       }
 
       el.innerHTML = `
         <div class="min-w-0 flex flex-col items-end justify-center">
-          <div class="flex min-h-[24px] max-w-full items-center justify-end overflow-hidden">${verdict}</div>
+          <div class="flex min-h-[26px] max-w-full items-center justify-end overflow-hidden">${verdict}</div>
           <div class="mt-1 max-w-full truncate text-[10px] text-nox-muted">Steam: ${shownSteamRub} ₽${regionSuffix}</div>
         </div>
       `;
@@ -1139,7 +1139,7 @@
             <div class="border-t border-nox-border/80 px-3 py-1.5 ${moreMethods ? '' : 'invisible'}" aria-hidden="${moreMethods ? 'false' : 'true'}">
               <div class="flex h-[24px] items-center gap-2 text-[11px]">
                 <span class="shrink-0 text-sm" aria-hidden="true">${moreMethods ? moreMethods.icon : '🎁'}</span>
-                <span class="min-w-0 flex-1 truncate font-semibold text-white">${moreMethods ? (group.alternateMethodKeys.length === 1 ? `Ещё: ${escapeHtml(deliveryLabelForSentence(group.alternateMethodKeys[0]))}` : `Ещё: ${group.alternateMethodKeys.length} способа`) : 'Ещё: гифт Steam'}</span>
+                <span class="min-w-0 flex-1 truncate font-semibold text-white">${moreMethods ? (group.alternateMethodKeys.length === 1 ? `Ещё доступен ${escapeHtml(deliveryLabelForSentence(group.alternateMethodKeys[0]))}` : `Ещё доступно ${group.alternateMethodKeys.length} способа`) : 'Ещё доступен гифт Steam'}</span>
                 <span class="shrink-0 text-base leading-none text-nox-muted">›</span>
               </div>
             </div>
