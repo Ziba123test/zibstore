@@ -125,8 +125,25 @@ function isMixedCisToken(value) {
   return /^[cс][hн][gг]$/u.test(token);
 }
 
+function collapseTranslatedSellerAlias(value) {
+  let s = String(value || '');
+
+  // Sellers sometimes write a localized DLC/subtitle immediately followed by
+  // its official English Steam name, e.g.:
+  //   «Откровения» (Revelations)
+  // Keeping both halves hurts exact Steam matching even though they refer to
+  // the same title. Only collapse the pair when the quoted part contains
+  // Cyrillic and the parenthesized alias contains Latin letters.
+  s = s.replace(
+    /[«“"]([^»”"]*[\p{Script=Cyrillic}][^»”"]*)[»”"]\s*\(\s*([A-Za-z][A-Za-z0-9:'’&.\- ]{1,80})\s*\)/gu,
+    ' $2 '
+  );
+
+  return s;
+}
+
 function cleanSalesTitle(value) {
-  const rawTitle = String(value || '');
+  const rawTitle = collapseTranslatedSellerAlias(value);
   const hadPercent = rawTitle.includes('%');
 
   let s = rawTitle
