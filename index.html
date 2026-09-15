@@ -398,6 +398,7 @@
   const digisellerDetailsCache = new Map();
   const digisellerReviewsCache = new Map();
   let openedProductId = null;
+  let openedSourceProductId = null;
   let openedProductGroupKey = null;
   let openedProductReal = true;
   let openedProductReviewsLoaded = false;
@@ -577,6 +578,23 @@
 
     const exact = STEAM_PRICE_MAP.byDigisellerId[String(product.id)];
     if (exact) return { ...exact, region: 'ru' };
+
+    // A default/Standard virtual edition may safely reuse an old mapping that
+    // belonged to the parent Digiseller product before variant expansion.
+    if (isEditionVariantProduct(product) && (product._editionVariantDefault || product._editionVariantTag === 'standard')) {
+      const parent = serverSteamMatches[sourceProductId(product)];
+      if (parent?.steamId) {
+        return {
+          type: parent.type === 'package' ? 'package' : 'app',
+          id: String(parent.steamId),
+          label: parent.title || product.name,
+          coverAppId: parent.coverAppId ? String(parent.coverAppId) : null,
+          coverUrl: parent.coverUrl ? String(parent.coverUrl) : null,
+          coverMode: parent.coverMode ? String(parent.coverMode) : 'steam',
+          region: 'ru'
+        };
+      }
+    }
 
     // IMPORTANT: do not guess Steam AppID from the product title.
     // Broad title rules can map a sequel/remaster/retold edition to an older game.
@@ -980,6 +998,137 @@
     return merged;
   }
 
+  function sourceProductId(product) {
+    return String(product?._sourceProductId || product?.id || '').trim();
+  }
+
+  function isEditionVariantProduct(product) {
+    return Boolean(product?._isEditionVariant && /^\d+$/.test(sourceProductId(product)));
+  }
+
+  function shouldInspectEditionVariantsClient(product) {
+    const title = String(product?.name || '');
+    return /выбор\s+издани|(?:standard|deluxe|premium|ultimate|gold)\s*[\/|+]\s*(?:standard|deluxe|premium|ultimate|gold)|издани.*(?:standard|deluxe|premium)|(?:standard|deluxe|premium).*издани/i.test(title);
+  }
+
+  function clientEditionTag(value) {
+    const s = String(value || '').toLowerCase();
+    const rules = [
+      ['super_deluxe', /\bsuper\s+deluxe\b|\bсупер\s+делюкс\b/i],
+      ['premium', /\bpremium\b|\bпремиум\b/i],
+      ['deluxe', /\bdeluxe\b|\bделюкс\b/i],
+      ['ultimate', /\bultimate\b|\bультимейт\b/i],
+      ['gold', /\bgold\b|\bзолот/i],
+      ['definitive', /\bdefinitive\b/i],
+      ['complete', /\bcomplete\b|\bполное\s+издани/i],
+      ['standard', /\bstandard\b|\bстандарт/i]
+    ];
+    return rules.find(([, re]) => re.test(s))?.[0] || '';
+  }
+
+  function clientEditionLabel(tag, fallback = '') {
+    const labels = {
+      standard: 'Standard Edition',
+      deluxe: 'Deluxe Edition',
+      super_deluxe: 'Super Deluxe Edition',
+      premium: 'Premium Edition',
+      ultimate: 'Ultimate Edition',
+      gold: 'Gold Edition',
+      definitive: 'Definitive Edition',
+      complete: 'Complete Edition'
+    };
+    return labels[tag] || String(fallback || '').trim() || 'Edition';
+  }
+
+  function virtualEditionProductId(sourceId, optionId, variantId) {
+    return `v_${String(sourceId)}_${String(optionId)}_${String(variantId)}`;
+  }
+
+  function buildVirtualEditionTitle(sourceTitle, variant) {
+    const tag = variant.editionTag || clientEditionTag(variant.text);
+    const label = clientEditionLabel(tag, variant.text);
+    let title = String(sourceTitle || '').normalize('NFKC');
+    let replaced = false;
+
+    title = title.replace(/выбор\s+издания/ig, () => {
+      replaced = true;
+      return label;
+    });
+    title = title.replace(
+      /\b(?:standard|deluxe|premium|ultimate|gold)(?:\s*\/\s*(?:standard|deluxe|premium|ultimate|gold)){1,}\b/ig,
+      () => {
+        replaced = true;
+        return label;
+      }
+    );
+    if (!replaced) title = `${title} — ${label}`;
+    return title.replace(/\s{2,}/g, ' ').replace(/-\s*\|/g, '|').trim();
+  }
+
+  function variantFinalPrice(product, variant) {
+    const base = getProductPrice(product);
+    const delta = Number(variant?.modifyValue || 0);
+    const type = String(variant?.modifyType || '').trim().toUpperCase();
+    if (!Number.isFinite(base)) return 0;
+    if (!Number.isFinite(delta) || !delta) return base;
+    if (!type || type === 'RUB' || type === 'RUR') return Math.max(0, base + delta);
+    if (type === '%') return Math.max(0, base * (1 + delta / 100));
+    return base;
+  }
+
+  async function expandEditionVariantProducts(products) {
+    const result = [];
+
+    for (const product of products) {
+      if (!shouldInspectEditionVariantsClient(product)) {
+        result.push(product);
+        continue;
+      }
+
+      const details = await fetchSellerProductDetails(product.id);
+      const editionOptions = Array.isArray(details?.editionOptions) ? details.editionOptions : [];
+      if (editionOptions.length !== 1) {
+        result.push(product);
+        continue;
+      }
+
+      const option = editionOptions[0];
+      const variants = (Array.isArray(option.variants) ? option.variants : [])
+        .filter(variant => variant.visible !== 0 && variant.isAvailable !== 0 && /^\d+$/.test(String(variant.value || '')));
+
+      if (!/^\d+$/.test(String(option.id || '')) || !variants.length) {
+        result.push(product);
+        continue;
+      }
+
+      for (const variant of variants) {
+        const virtualId = virtualEditionProductId(product.id, option.id, variant.value);
+        const finalPrice = variantFinalPrice(product, variant);
+        result.push({
+          ...product,
+          id: virtualId,
+          name: buildVirtualEditionTitle(product.name, variant),
+          price_rub: finalPrice,
+          price: finalPrice,
+          has_discount: 0,
+          _isEditionVariant: true,
+          _sourceProductId: String(product.id),
+          _sourceProductName: String(product.name || ''),
+          _editionOptionId: String(option.id),
+          _editionOptionLabel: String(option.label || ''),
+          _editionVariantId: String(variant.value),
+          _editionVariantLabel: String(variant.text || ''),
+          _editionVariantTag: String(variant.editionTag || clientEditionTag(variant.text)),
+          _editionVariantModifyValue: Number(variant.modifyValue || 0),
+          _editionVariantModifyType: String(variant.modifyType || ''),
+          _editionVariantDefault: Boolean(variant.default)
+        });
+      }
+    }
+
+    return result;
+  }
+
   let productsRequestId = 0;
 
   async function loadProducts() {
@@ -992,7 +1141,7 @@
         ? await fetchAllProducts()
         : await fetchCategoryProducts(state.categoryId);
       if (requestId !== productsRequestId) return;
-      state.rawProducts = products;
+      state.rawProducts = await expandEditionVariantProducts(products);
       state.isFallback = false;
       editionFilterSelect.disabled = false;
       applyAndRender();
@@ -1171,6 +1320,16 @@
         if (event.target.closest('[data-buy-link]')) return;
         event.preventDefault();
         openProductDetails(productId, { real });
+      });
+    });
+
+    grid.querySelectorAll('[data-buy-link]').forEach(link => {
+      const card = link.closest('[data-product-card]');
+      const product = state.rawProducts.find(item => String(item.id) === String(card?.dataset.productCard || ''));
+      if (!product || !isEditionVariantProduct(product)) return;
+      link.addEventListener('click', event => {
+        event.preventDefault();
+        startVariantCheckout(product);
       });
     });
 
@@ -1960,7 +2119,7 @@ function hasDlcTitleLabel(title) {
       productReviewState.rows
     );
 
-    if (productReviewState.productId !== openedProductId) return;
+    if (productReviewState.productId !== openedSourceProductId) return;
 
     productReviewState.loading = false;
     productReviewState.ok = Boolean(data?.ok);
@@ -2029,9 +2188,64 @@ function hasDlcTitleLabel(title) {
   }
 
   function productBuyUrl(product, real = true) {
-    return real
-      ? buildAffiliatePaymentUrl(product.id)
-      : '#';
+    if (!real) return '#';
+    if (isEditionVariantProduct(product)) return '#';
+    return buildAffiliatePaymentUrl(sourceProductId(product));
+  }
+
+  async function startVariantCheckout(product) {
+    if (!isEditionVariantProduct(product)) return;
+
+    const popupName = `zibstoreCheckout${Date.now()}`;
+    const popup = window.open('', popupName);
+    if (popup) {
+      popup.document.title = 'ЗибСтор — подготовка покупки';
+      popup.document.body.innerHTML = '<div style="font:16px system-ui;padding:32px;background:#151211;color:#fff;min-height:100vh">Подготавливаем выбранное издание…</div>';
+    }
+
+    try {
+      const res = await fetch('https://api.zibstore.ru/api/create-variant-checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          productId: sourceProductId(product),
+          optionId: String(product._editionOptionId || ''),
+          variantId: String(product._editionVariantId || '')
+        })
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.ok || !data?.idPo) throw new Error(data?.error || `HTTP ${res.status}`);
+
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = 'https://digiseller.market/asp2/pay.asp';
+      form.target = popup ? popupName : '_self';
+      form.style.display = 'none';
+
+      const fields = {
+        id_d: sourceProductId(product),
+        id_po: String(data.idPo),
+        agent: String(SELLER_ID),
+        ai: String(SELLER_ID),
+        lang: 'ru-RU',
+        typecurr: 'RUB'
+      };
+      for (const [name, value] of Object.entries(fields)) {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = name;
+        input.value = value;
+        form.appendChild(input);
+      }
+
+      document.body.appendChild(form);
+      form.submit();
+      form.remove();
+    } catch (err) {
+      if (popup && !popup.closed) popup.close();
+      console.error('Variant checkout failed:', err);
+      alert(`Не удалось подготовить выбранное издание: ${err.message}`);
+    }
   }
 
   function getDirectCoverUrl(product, target) {
@@ -2163,7 +2377,8 @@ function hasDlcTitleLabel(title) {
     externalReviewsEl.removeAttribute('href');
 
     openedProductReviewsLoaded = false;
-    resetProductReviewState(product.id);
+    openedSourceProductId = sourceProductId(product);
+    resetProductReviewState(openedSourceProductId);
     document.getElementById('product-reviews-count').textContent = '';
     document.getElementById('product-reviews-summary').textContent = '';
     document.getElementById('product-reviews-controls').classList.add('hidden');
@@ -2203,7 +2418,7 @@ function hasDlcTitleLabel(title) {
     additionalEl.textContent = '';
     additionalWrap.classList.add('hidden');
 
-    fetchSellerProductDetails(product.id).then(details => {
+    fetchSellerProductDetails(sourceProductId(product)).then(details => {
       if (openedProductId !== String(product.id)) return;
 
       const sellerName = String(details?.seller?.name || '').trim();
@@ -2278,6 +2493,7 @@ function hasDlcTitleLabel(title) {
     modal.classList.add('hidden');
     document.body.classList.remove('modal-open');
     openedProductId = null;
+    openedSourceProductId = null;
     openedProductGroupKey = null;
 
     if (updateUrl) {
@@ -2286,6 +2502,13 @@ function hasDlcTitleLabel(title) {
       history.pushState({}, '', url);
     }
   }
+
+  document.getElementById('product-modal-buy').addEventListener('click', event => {
+    const product = state.rawProducts.find(item => String(item.id) === String(openedProductId || ''));
+    if (!product || !isEditionVariantProduct(product)) return;
+    event.preventDefault();
+    startVariantCheckout(product);
+  });
 
   document.getElementById('product-modal-close').addEventListener('click', () => closeProductDetails());
   document.getElementById('product-modal-backdrop').addEventListener('click', () => closeProductDetails());

@@ -47,3 +47,99 @@ curl -s https://api.zibstore.ru/health
 Ожидаемые цели:
 - Middle-earth: Shadow of War Definitive -> package 281112, coverAppId 356190
 - CRIMSON DESERT Deluxe Edition -> package 1418529, coverAppId 3321460
+
+
+v98 — punctuation/history auto-match fix
+----------------------------------------
+- Steam/Digiseller base-title comparison now ignores colon separators.
+- Example now auto-inherits correctly:
+  "Middle-earth Shadow of War Definitive +7 DLC Steam Key"
+  -> existing "Middle-earth: Shadow of War - Definitive"
+  -> package 281112.
+- The same canonical title is used for Steam base-app matching and admin diagnostics.
+
+
+v99 — Resident Evil remake / named package matching
+----------------------------------------------------
+- Seller suffix "Remake" can match Steam's cleaner official app title.
+  Example: "Resident Evil 4 Remake" -> AppID 2050650 ("Resident Evil 4").
+- Named collections (Trilogy / Collection / Anthology / Compilation /
+  Franchise Pack) are now treated as possible Steam packages.
+- Package discovery uses already verified franchise AppIDs as safe anchors, then
+  accepts automatically only an exact package-title match.
+- Example: "Resident Evil Remake Trilogy" -> Package/SubID 1142889.
+- Admin "Найти AppID / Package" uses the same logic.
+
+
+v100 — numeric sequel + Remake inheritance fix
+-----------------------------------------------
+Root cause:
+- the percentage-cleanup fallback removed any trailing 1-2 digit token;
+- therefore historical "Resident Evil 4" became "Resident Evil";
+- the new "Resident Evil 4 Remake" could not inherit AppID 2050650.
+
+Fix:
+- a trailing number is removed only if the ORIGINAL seller title actually
+  contained a percent sign;
+- history inheritance uses the same safe Remake/Enhanced alias rule as Steam;
+- Steam search additionally tries a query without Remake/Enhanced.
+
+Expected:
+"Resident Evil 4 Remake (STEAM/CHГ) КЛЮЧ"
+-> historical "Resident Evil 4 ..."
+-> app 2050650.
+
+
+v101 — Dawn of War IV Commander Edition
+----------------------------------------
+- LATAM / ЛАТАМ is now treated as seller region noise.
+- Commander Edition is recognized internally as a Steam package edition.
+- Commander is removed only for base-game comparison, so:
+    "Warhammer 40,000: Dawn of War IV"
+      -> AppID 2272360
+    "Warhammer 40,000: Dawn of War IV - Commander Edition"
+      -> Package/SubID 1624417
+      -> coverAppId 2272360
+- No storefront badge/filter/sort option was added for Commander Edition.
+  index.html was intentionally left unchanged.
+
+
+v102 — Fable (2027) year-disambiguator fix
+-------------------------------------------
+- A standalone release year in parentheses is now treated as seller metadata:
+    "Fable (2027) — Standard" -> base "Fable"
+    "Fable (2027) — Premium"  -> base "Fable"
+- This is deliberately narrow. Real title years without parentheses remain:
+    "F1 2025" stays "F1 2025".
+- Expected Steam mappings:
+    Standard -> AppID 2769570 (Fable)
+    Premium  -> Package/SubID 1654129, coverAppId 2769570
+- No storefront badges, filters, sort options or index.html changes.
+
+
+v103 — expanded edition filter
+-------------------------------
+"Издание: расширенное" now also includes:
+- Definitive Edition
+- Commander Edition
+- Trilogy
+- Collection
+- Anthology
+- Compilation
+- Franchise Pack
+- Bundle
+
+No new badges were added and no new dedicated edition options were added.
+DLC/add-ons remain excluded from the full-game edition filter.
+
+v111 — mixed-script СНГ + seller Steam URL fallback
+---------------------------------------------------
+- Mixed Latin/Cyrillic СНГ markers are stripped during title normalization.
+- Unresolved products can use a validated Steam AppID embedded in seller description.
+- Commercial editions are protected from accidental base-app binding.
+
+v112 — Digiseller edition variants
+----------------------------------
+Update index.html and api/server.js, then restart zibstore-api.
+Run Digiseller sync in admin after deployment so virtual edition variants get
+individual Steam AppID/Package mappings.
