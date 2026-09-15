@@ -212,6 +212,7 @@ function editionInfo(value) {
     ['collector', /\bcollector'?s?\b/i],
     ['definitive', /\bdefinitive\b/i],
     ['commander', /\bcommander(?:\s+edition)?\b/i],
+    ['devout', /\bdevout(?:\s+edition)?\b/i],
     ['anniversary', /\banniversary\b/i],
     ['goty', /\bgoty\b|\bgame\s+of\s+the\s+year\b/i],
     ['special', /\bspecial(?:\s+edition)?\b/i],
@@ -228,7 +229,7 @@ function editionInfo(value) {
 function baseGameTitle(value) {
   return cleanSalesTitle(value)
     .replace(/\bgame\s+of\s+the\s+year\b/gi, ' ')
-    .replace(/\b(?:super\s+deluxe|premium|deluxe|ultimate|gold|complete|collector'?s?|definitive|commander|anniversary|goty|special|limited|divine|eternal|bundle)(?:\s+edition)?\b/gi, ' ')
+    .replace(/\b(?:super\s+deluxe|premium|deluxe|ultimate|gold|complete|collector'?s?|definitive|commander|devout|anniversary|goty|special|limited|divine|eternal|bundle)(?:\s+edition)?\b/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -348,6 +349,18 @@ function namedPackageInfo(value) {
 
 function isNamedCollectionPackage(value) {
   return Boolean(namedPackageInfo(value).tag);
+}
+
+function collectionSuffixAliasMatch(a, b) {
+  const aa = canonicalCommerceTitle(a);
+  const bb = canonicalCommerceTitle(b);
+  if (!aa || !bb || aa === bb) return false;
+
+  // Some sellers omit the final commercial descriptor even though Steam names
+  // the complete package "... Collection". Keep this alias deliberately narrow:
+  // only one exact trailing word may differ, and final package validation still
+  // requires the package to contain the anchor/base app.
+  return aa === `${bb} collection` || bb === `${aa} collection`;
 }
 
 function packageTitleSimilarity(a, b) {
@@ -844,11 +857,34 @@ async function findNamedPackageAnchorApps(product, matches = null) {
     if (anchors.length >= 6) break;
   }
 
+  // If a seller title is a commercial subtitle (for example
+  // "Diablo IV: Age of Hatred") Steam search may not return the base app for
+  // the full phrase. The franchise prefix before ':' is a safe *anchor only*;
+  // the package itself still has to pass exact/Collection-suffix validation.
+  if (!anchors.length) {
+    const cleaned = cleanSalesTitle(product?.name);
+    const colon = cleaned.indexOf(':');
+    const prefix = colon > 0 ? cleaned.slice(0, colon).trim() : '';
+    if (prefix && prefix.length >= 3 && prefix !== query) {
+      const prefixItems = await steamStoreSearch(prefix);
+      for (const item of prefixItems.slice(0, 10)) {
+        if (!item?.id || !item?.name) continue;
+        const prefixBase = canonicalBaseGameTitle(prefix);
+        const itemBase = canonicalBaseGameTitle(item.name);
+        const exactPrefix = prefixBase && prefixBase === itemBase;
+        const score = exactPrefix ? 1 : titleSimilarity(prefix, item.name);
+        if (!exactPrefix && score < 0.94) continue;
+        push(item.id, item.name, score, 'steam-search-prefix');
+        if (anchors.length >= 4) break;
+      }
+    }
+  }
+
   return anchors;
 }
 
-async function discoverNamedPackageCandidates(product, matches = null) {
-  if (!isNamedCollectionPackage(product?.name)) return [];
+async function discoverNamedPackageCandidates(product, matches = null, { allowImplicitCollection = false } = {}) {
+  if (!isNamedCollectionPackage(product?.name) && !allowImplicitCollection) return [];
 
   const anchors = await findNamedPackageAnchorApps(product, matches);
   if (!anchors.length) return [];
@@ -895,7 +931,11 @@ async function discoverNamedPackageCandidates(product, matches = null) {
     const score = packageTitleSimilarity(product.name, comparedName);
     const exactTitle =
       canonicalCommerceTitle(product.name) === canonicalCommerceTitle(comparedName) ||
-      (hintText && canonicalCommerceTitle(product.name) === canonicalCommerceTitle(hintText));
+      collectionSuffixAliasMatch(product.name, comparedName) ||
+      (hintText && (
+        canonicalCommerceTitle(product.name) === canonicalCommerceTitle(hintText) ||
+        collectionSuffixAliasMatch(product.name, hintText)
+      ));
 
     const suspicious = /(?:upgrade|soundtrack|commercial\s+license|season\s+pass)/i.test(
       `${name} ${hintText} ${optionDescription}`
@@ -927,8 +967,8 @@ async function discoverNamedPackageCandidates(product, matches = null) {
   });
 }
 
-async function matchNamedPackageFromSteam(product, matches = null) {
-  const candidates = await discoverNamedPackageCandidates(product, matches);
+async function matchNamedPackageFromSteam(product, matches = null, { allowImplicitCollection = false } = {}) {
+  const candidates = await discoverNamedPackageCandidates(product, matches, { allowImplicitCollection });
   const valid = candidates.filter(x => x.exactTitle && !x.suspicious);
   if (!valid.length) return null;
 
@@ -951,7 +991,7 @@ async function matchNamedPackageFromSteam(product, matches = null) {
     autoMatched: true,
     matchSource: 'steam-package-named',
     steamSearchName: String(top.name),
-    packageKind: namedPackageInfo(product.name).tag,
+    packageKind: namedPackageInfo(product.name).tag || (allowImplicitCollection ? 'collection' : null),
     matchConfidence: 1
   };
 }
@@ -1234,6 +1274,22 @@ async function adminSteamCandidates(product, matches = null) {
     merged.push(candidate);
   }
 
+  const hasStrongApp = merged.some(candidate =>
+    candidate.type === 'app' && Number(candidate.confidence ?? candidate.score ?? 0) >= 0.97
+  );
+  if (!dlcProduct && !edition.tag && !hasStrongApp) {
+    const packages = await discoverNamedPackageCandidates(product, matches, { allowImplicitCollection: true });
+    const implicit = packages.filter(candidate => candidate.exactTitle && !candidate.suspicious);
+    if (implicit.length) {
+      return {
+        mode: 'named-package',
+        query: canonicalCommerceTitle(product.name),
+        baseApp: null,
+        candidates: implicit.slice(0, 8)
+      };
+    }
+  }
+
   return { mode: 'app', query, baseApp: null, candidates: merged.slice(0, 8) };
 }
 
@@ -1370,7 +1426,17 @@ async function matchFromSteamSearch(product, matches = null) {
 
   const best = scored[0];
   const second = scored[1];
-  if (!best) return null;
+  if (!best) {
+    if (!dlcProduct && !currentEdition.tag) {
+      const implicitCollection = await matchNamedPackageFromSteam(
+        product,
+        matches,
+        { allowImplicitCollection: true }
+      );
+      if (implicitCollection) return implicitCollection;
+    }
+    return null;
+  }
 
   if (!best.exactBase && !best.standardAlias) {
     const margin = best.score - (second?.score || 0);
