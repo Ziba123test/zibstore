@@ -1,0 +1,7 @@
+ZibStore v113 — virtual edition fixes
+
+- Seller descriptors “цифровой / digital / электронный” are ignored during Steam title matching.
+- Virtual Standard/Deluxe variants can inherit existing Steam mappings from equivalent gift/key lots.
+- Variant checkout sends safe default values for additional Digiseller product options.
+- If Digiseller reports another missing parameter, the API retries with its explicit default or sole available value.
+- The server does not guess between several non-default values.
