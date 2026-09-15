@@ -200,18 +200,18 @@
               <img id="product-modal-art-img" alt="" class="hidden h-full w-full object-cover" referrerpolicy="no-referrer">
               <div id="product-modal-badges" class="pointer-events-none absolute inset-0 z-20"></div>
             </div>
-
-            <div id="product-modal-localization"
-              class="mx-auto mt-3 hidden w-full max-w-[340px] rounded-xl border border-nox-border bg-nox-card/60 p-3">
-              <div class="text-[10px] uppercase tracking-wide text-nox-muted">Русская локализация</div>
-              <div id="product-modal-localization-rows" class="mt-2 space-y-1.5"></div>
-            </div>
           </div>
 
           <div class="p-4 sm:p-6 lg:flex lg:h-full lg:min-h-0 lg:flex-col lg:p-6">
             <div class="shrink-0 pr-12">
               <h2 id="product-modal-title" class="font-display text-2xl font-bold leading-tight sm:text-3xl"></h2>
               <p id="product-modal-subtitle" class="mt-2 text-sm leading-relaxed text-nox-muted"></p>
+
+              <div id="product-modal-localization"
+                class="mt-4 hidden rounded-xl border border-nox-border bg-nox-card/60 p-3">
+                <div class="text-[10px] uppercase tracking-wide text-nox-muted">Русская локализация</div>
+                <div id="product-modal-localization-rows" class="mt-2 grid gap-2 sm:grid-cols-3"></div>
+              </div>
             </div>
 
             <div class="mt-5 shrink-0 overflow-hidden rounded-xl border border-nox-border bg-nox-card/60">
@@ -230,6 +230,20 @@
               <div id="product-modal-saving" class="hidden border-t border-emerald-500/20 bg-emerald-500/10 px-4 py-3">
                 <div id="product-modal-saving-value" class="text-base font-bold text-emerald-300"></div>
               </div>
+            </div>
+
+            <div id="product-modal-delivery-wrap" class="mt-4 hidden">
+              <div class="mb-2 flex items-center gap-2">
+                <div class="text-sm font-semibold text-white">Способ получения</div>
+                <button
+                  id="product-modal-delivery-help"
+                  type="button"
+                  class="grid h-5 w-5 place-items-center rounded-full border border-nox-border bg-white/5 text-[11px] font-bold text-nox-muted transition hover:border-nox-accent hover:text-nox-accent"
+                  title="Выберите способ получения товара. При переключении меняются цена, продавец, описание, отзывы и ссылка на покупку."
+                  aria-label="Выберите способ получения товара. При переключении меняются цена, продавец, описание, отзывы и ссылка на покупку."
+                >?</button>
+              </div>
+              <div id="product-modal-delivery-switch" class="grid gap-2 sm:grid-cols-2"></div>
             </div>
 
             <a
@@ -352,6 +366,7 @@
     editionFilter: 'all',
     categoriesList: [],   // реальные категории с API (без псевдо-"Все")
     rawProducts: [],      // сырые товары текущей категории/подборки, как пришли с сервера
+    displayGroups: [],    // сгруппированные карточки каталога (игра/издание -> способы получения)
     order: 'popular',
     page: 1,
     search: ''
@@ -363,6 +378,8 @@
   const digisellerDetailsCache = new Map();
   const digisellerReviewsCache = new Map();
   let openedProductId = null;
+  let openedProductGroupKey = null;
+  let openedProductReal = true;
   let openedProductReviewsLoaded = false;
 
   const productReviewState = {
@@ -612,11 +629,11 @@
     }
 
     return `
-      <div class="flex items-center justify-between gap-3 text-xs">
-        <span class="text-nox-muted">${escapeHtml(label)}</span>
-        <span class="font-semibold ${valueClass}">
+      <div class="rounded-lg border border-nox-border bg-black/10 px-3 py-2 text-xs">
+        <div class="text-nox-muted">${escapeHtml(label)}</div>
+        <div class="mt-1 font-semibold ${valueClass}">
           <span class="mr-1">${icon}</span>${valueText}
-        </span>
+        </div>
       </div>
     `;
   }
@@ -973,11 +990,12 @@
   // ---------------- Сортировка + пагинация (клиентские, без повторных запросов) ----------------
   function applySort(products, order) {
     const list = [...products];
+    const itemPrice = item => getProductPrice(item?.activeProduct || item);
     switch (order) {
       case 'price':
-        return list.sort((a, b) => (a.price_rub ?? a.price ?? 0) - (b.price_rub ?? b.price ?? 0));
+        return list.sort((a, b) => itemPrice(a) - itemPrice(b));
       case 'priceDESC':
-        return list.sort((a, b) => (b.price_rub ?? b.price ?? 0) - (a.price_rub ?? a.price ?? 0));
+        return list.sort((a, b) => itemPrice(b) - itemPrice(a));
       case 'popular':
       default:
         // Порядок "как в Моём магазине" — то, что вернул сервер без параметра order.
@@ -997,8 +1015,11 @@
       const q = state.search.toLowerCase();
       filtered = filtered.filter(p => p.name.toLowerCase().includes(q));
     }
-    productCount.textContent = `Товаров: ${filtered.length}`;
-    const sorted = applySort(filtered, state.order);
+
+    const grouped = buildDisplayGroups(filtered);
+    state.displayGroups = grouped;
+    productCount.textContent = `Товаров: ${grouped.length}`;
+    const sorted = applySort(grouped, state.order);
 
     const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
     state.page = Math.min(state.page, totalPages);
@@ -1050,16 +1071,17 @@
     return match ? match.label : '';
   }
 
-  function renderProducts(products, { real }) {
-    if (!products.length) {
+  function renderProducts(groups, { real }) {
+    if (!groups.length) {
       grid.innerHTML = '';
       emptyEl.classList.remove('hidden');
       return;
     }
     emptyEl.classList.add('hidden');
 
-    grid.innerHTML = products.map(p => {
-      const price = Number(p.price_rub ?? p.price ?? p.base_price);
+    grid.innerHTML = groups.map(group => {
+      const p = group.activeProduct;
+      const price = getProductPrice(p);
       const oldPriceCandidate = Number(p.base_price ?? p.sale_info?.common_base_price);
       const oldPrice = (
         p.has_discount == 1 &&
@@ -1070,6 +1092,7 @@
       const buyUrl = real
         ? buildAffiliatePaymentUrl(p.id)
         : '#';
+      const moreMethods = groupAlternateMethodSummary(group);
       return `
       <div
         class="product-card-clickable group rounded-2xl border border-nox-border bg-nox-card overflow-hidden flex flex-col hover:border-nox-accent/50 transition"
@@ -1098,6 +1121,18 @@
               ` : '<div class="border-t border-transparent pt-2"></div>'}
             </div>
           </div>
+          ${moreMethods ? `
+            <div class="mt-2 rounded-xl border border-nox-border bg-white/[0.03] px-3 py-2.5">
+              <div class="flex items-center gap-3">
+                <span class="text-lg" aria-hidden="true">${moreMethods.icon}</span>
+                <div class="min-w-0 flex-1">
+                  <div class="text-sm font-semibold text-white">${escapeHtml(moreMethods.title)}</div>
+                  <div class="text-xs text-nox-muted">${escapeHtml(moreMethods.subtitle)}</div>
+                </div>
+                <span class="text-lg leading-none text-nox-muted">›</span>
+              </div>
+            </div>
+          ` : ''}
           <a href="${buyUrl}" target="_blank" rel="noopener" data-buy-link="1"
              class="mt-3 block text-center rounded-lg bg-nox-accent px-3 py-2 text-sm font-bold text-nox-bg hover:bg-yellow-400 transition ${real ? '' : 'pointer-events-none opacity-60'}">
             Купить
@@ -1122,7 +1157,7 @@
       });
     });
 
-    if (real) enhanceWithSteamPrices(products);
+    if (real) enhanceWithSteamPrices(groups.map(group => group.activeProduct).filter(Boolean));
   }
 
 
@@ -1272,6 +1307,232 @@ function hasDlcTitleLabel(title) {
     }
 
     return { key: 'steam', badge: 'Steam' };
+  }
+
+
+  function getProductPrice(product) {
+    return Number(product?.price_rub ?? product?.price ?? product?.base_price ?? 0);
+  }
+
+  function deliveryLabelByKey(key) {
+    if (key === 'gift') return 'Гифт Steam';
+    if (key === 'key') return 'Ключ Steam';
+    if (key === 'topup') return 'Пополнение Steam';
+    return 'Steam';
+  }
+
+  function deliveryLabelForSentence(key) {
+    if (key === 'gift') return 'гифт Steam';
+    if (key === 'key') return 'ключ Steam';
+    if (key === 'topup') return 'пополнение Steam';
+    return 'товар Steam';
+  }
+
+  function deliveryIconByKey(key) {
+    if (key === 'gift') return '🎁';
+    if (key === 'key') return '🔑';
+    if (key === 'topup') return '💳';
+    return '🛒';
+  }
+
+  function getEditionGroupingKey(product) {
+    if (isDlcProduct(product)) return 'dlc';
+
+    const title = String(product?.name || '').normalize('NFKC');
+    if (/выбор\s+издани|выберите\s+издани|(?:standard|deluxe|premium|gold|ultimate)\s*[\/|+]\s*(?:standard|deluxe|premium|gold|ultimate)/i.test(title)) return 'choice';
+
+    const rules = [
+      ['deluxe', /\bdeluxe(?:\s+edition)?\b|делюкс/iu],
+      ['premium', /\bpremium(?:\s+edition)?\b|премиум/iu],
+      ['ultimate', /\bultimate(?:\s+edition)?\b|ультимейт/iu],
+      ['gold', /\bgold(?:\s+edition)?\b|золотое\s+издание/iu],
+      ['definitive', /\bdefinitive(?:\s+edition)?\b/iu],
+      ['commander', /\bcommander(?:\s+edition)?\b/iu],
+      ['complete', /\bcomplete(?:\s+edition)?\b|полное\s+издание/iu],
+      ['trilogy', /\btrilogy\b/iu],
+      ['collection', /\bcollection\b/iu],
+      ['anthology', /\banthology\b/iu],
+      ['compilation', /\bcompilation\b/iu],
+      ['bundle', /\bbundle\b|\bfranchise\s+pack\b/iu],
+      ['other', /\b(?:goty|collector[’']?s?|anniversary|special|divine|eternal)\s+edition\b|\bgoty\b|game\s+of\s+the\s+year/iu]
+    ];
+
+    const match = rules.find(([, re]) => re.test(title));
+    return match ? match[0] : 'base';
+  }
+
+  function normalizeCatalogGroupTitle(value) {
+    let s = String(value || '').normalize('NFKC').toLowerCase();
+    s = s.replace(/[™®©℠]/g, ' ');
+    s = s.replace(/[\u{1F000}-\u{1FAFF}\uFE0F]/gu, ' ');
+    s = s.replace(/\((?:19|20)\d{2}\)/g, ' ');
+    s = s.replace(/(?:steam\s*gift|steam\s*auto|автодоставка|гифт|gift|ключ|\bkey\b)/giu, ' ');
+    s = s.replace(/(?:ру|рф|снг|мир|латам|тр|ua|ru|rf|by|kz|tr|ar|cis|latam|world|global)/giu, ' ');
+    s = s.replace(/\b(?:deluxe|premium|ultimate|gold|complete|collector'?s?|definitive|commander|anniversary|goty|special|divine|eternal|bundle|trilogy|collection|anthology|compilation|franchise\s+pack)(?:\s+edition)?\b/giu, ' ');
+    s = s.replace(/[^\p{L}\p{N}]+/gu, ' ');
+    return s.trim();
+  }
+
+  function getCatalogGroupKey(product) {
+    const productId = String(product?.id || '');
+    const saved = serverSteamMatches[productId];
+    const exact = STEAM_PRICE_MAP.byDigisellerId[productId];
+
+    let identity = `name:${normalizeCatalogGroupTitle(product?.name) || productId}`;
+    if (saved && saved.steamId) {
+      identity = `${saved.type === 'package' ? 'package' : 'app'}:${String(saved.steamId)}`;
+    } else if (exact && exact.id) {
+      identity = `${exact.type === 'package' ? 'package' : 'app'}:${String(exact.id)}`;
+    }
+
+    return `${identity}|edition:${getEditionGroupingKey(product)}|dlc:${isDlcProduct(product) ? 1 : 0}`;
+  }
+
+  function buildDisplayGroups(products) {
+    const groups = new Map();
+    const preferredDelivery = selectedCategoryKind();
+
+    products.forEach((product, index) => {
+      const key = getCatalogGroupKey(product);
+      const delivery = inferDeliveryType(product);
+      const methodKey = delivery.key || 'steam';
+
+      let group = groups.get(key);
+      if (!group) {
+        group = {
+          key,
+          orderIndex: index,
+          products: [],
+          methods: {}
+        };
+        groups.set(key, group);
+      }
+
+      group.products.push(product);
+
+      const current = group.methods[methodKey];
+      if (!current || getProductPrice(product) < getProductPrice(current)) {
+        group.methods[methodKey] = product;
+      }
+    });
+
+    return Array.from(groups.values()).map(group => {
+      const methodEntries = Object.entries(group.methods)
+        .filter(([, product]) => product)
+        .sort((a, b) => getProductPrice(a[1]) - getProductPrice(b[1]));
+
+      if (!methodEntries.length) return null;
+
+      let activeEntry = methodEntries[0];
+      if (preferredDelivery === 'gift' && group.methods.gift) activeEntry = ['gift', group.methods.gift];
+      if (preferredDelivery === 'key' && group.methods.key) activeEntry = ['key', group.methods.key];
+
+      const [activeMethodKey, activeProduct] = activeEntry;
+      const availableMethodKeys = methodEntries.map(([methodKey]) => methodKey);
+      const alternateMethodKeys = availableMethodKeys.filter(methodKey => methodKey !== activeMethodKey);
+
+      return {
+        ...group,
+        methodEntries,
+        activeMethodKey,
+        activeProduct,
+        availableMethodKeys,
+        alternateMethodKeys,
+        hasAlternateMethods: alternateMethodKeys.length > 0
+      };
+    }).filter(Boolean);
+  }
+
+  function groupAlternateMethodSummary(group) {
+    if (!group?.hasAlternateMethods) return null;
+
+    const count = group.alternateMethodKeys.length;
+    if (count === 1) {
+      const methodKey = group.alternateMethodKeys[0];
+      return {
+        title: 'Есть ещё 1 способ получения',
+        subtitle: `Доступен ${deliveryLabelForSentence(methodKey)}`,
+        icon: deliveryIconByKey(methodKey)
+      };
+    }
+
+    return {
+      title: `Есть ещё ${count} способа получения`,
+      subtitle: group.alternateMethodKeys.map(deliveryLabelForSentence).join(' · '),
+      icon: '↔'
+    };
+  }
+
+  function findDisplayGroupByProductId(productId) {
+    const id = String(productId || '');
+    const currentGroups = Array.isArray(state.displayGroups) ? state.displayGroups : [];
+    let group = currentGroups.find(item => item.products.some(product => String(product.id) === id));
+    if (group) return group;
+
+    const fallbackGroups = buildDisplayGroups(state.rawProducts || []);
+    return fallbackGroups.find(item => item.products.some(product => String(product.id) === id)) || null;
+  }
+
+  function buildSingleProductGroup(product) {
+    const delivery = inferDeliveryType(product);
+    return {
+      key: `single:${String(product?.id || '')}`,
+      products: [product],
+      methods: { [delivery.key || 'steam']: product },
+      methodEntries: [[delivery.key || 'steam', product]],
+      activeMethodKey: delivery.key || 'steam',
+      activeProduct: product,
+      availableMethodKeys: [delivery.key || 'steam'],
+      alternateMethodKeys: [],
+      hasAlternateMethods: false
+    };
+  }
+
+  function renderModalDeliverySwitch(group, activeProduct, { real = true } = {}) {
+    const wrap = document.getElementById('product-modal-delivery-wrap');
+    const switcher = document.getElementById('product-modal-delivery-switch');
+    if (!wrap || !switcher) return;
+
+    const methodEntries = Array.isArray(group?.methodEntries) ? group.methodEntries : [];
+    if (methodEntries.length < 2) {
+      wrap.classList.add('hidden');
+      switcher.innerHTML = '';
+      return;
+    }
+
+    wrap.classList.remove('hidden');
+    switcher.innerHTML = methodEntries.map(([methodKey, product]) => {
+      const active = String(product.id) === String(activeProduct?.id);
+      const price = getProductPrice(product);
+      const activeClasses = active
+        ? 'border-nox-accent bg-nox-accent/10 text-nox-accent shadow-[0_0_0_1px_rgba(242,185,68,0.35)]'
+        : 'border-nox-border bg-black/10 text-white hover:border-nox-accent/40';
+      const indicator = active
+        ? '<span class="grid h-5 w-5 place-items-center rounded-full bg-nox-accent text-[11px] font-bold text-nox-bg">✓</span>'
+        : '<span class="grid h-5 w-5 place-items-center rounded-full border border-nox-muted/40 text-[10px] text-nox-muted">○</span>';
+
+      return `
+        <button
+          type="button"
+          data-modal-delivery-product="${escapeHtml(String(product.id))}"
+          class="flex items-center gap-3 rounded-xl border px-3 py-3 text-left transition ${activeClasses}"
+        >
+          <span class="text-lg" aria-hidden="true">${deliveryIconByKey(methodKey)}</span>
+          <span class="min-w-0 flex-1">
+            <span class="block truncate text-sm font-semibold">${escapeHtml(deliveryLabelByKey(methodKey))} · ${formatNum(price)} ${CURRENCY_SYMBOL}</span>
+          </span>
+          ${indicator}
+        </button>
+      `;
+    }).join('');
+
+    switcher.querySelectorAll('[data-modal-delivery-product]').forEach(button => {
+      button.addEventListener('click', () => {
+        const nextProductId = button.dataset.modalDeliveryProduct || '';
+        if (!nextProductId || nextProductId === String(activeProduct?.id || '')) return;
+        openProductDetails(nextProductId, { real, updateUrl: true, urlMode: 'replace' });
+      });
+    });
   }
 
   function renderArtworkBadges(product, { modal = false } = {}) {
@@ -1855,11 +2116,15 @@ function hasDlcTitleLabel(title) {
     savingBox.classList.remove('hidden');
   }
 
-  async function openProductDetails(productId, { real = true, updateUrl = true } = {}) {
+  async function openProductDetails(productId, { real = true, updateUrl = true, urlMode = 'push' } = {}) {
     const product = state.rawProducts.find(p => String(p.id) === String(productId));
     if (!product) return;
 
+    const group = findDisplayGroupByProductId(productId) || buildSingleProductGroup(product);
+
     openedProductId = String(product.id);
+    openedProductGroupKey = String(group.key || '');
+    openedProductReal = real;
 
     const modal = document.getElementById('product-modal');
     const titleEl = document.getElementById('product-modal-title');
@@ -1893,7 +2158,7 @@ function hasDlcTitleLabel(title) {
     showProductTab('description');
 
     const target = getSteamTarget(product);
-    const price = Number(product.price_rub ?? product.price ?? product.base_price);
+    const price = getProductPrice(product);
 
     renderModalLocalization(null, { loading: Boolean(target), hasTarget: Boolean(target) });
 
@@ -1902,6 +2167,7 @@ function hasDlcTitleLabel(title) {
     priceEl.textContent = `${formatNum(price)} ${CURRENCY_SYMBOL}`;
 
     badgeEl.innerHTML = renderArtworkBadges(product, { modal: true });
+    renderModalDeliverySwitch(group, product, { real });
 
     const buyUrl = productBuyUrl(product, real);
     buyEl.href = buyUrl;
@@ -1972,7 +2238,11 @@ function hasDlcTitleLabel(title) {
     if (updateUrl) {
       const url = new URL(window.location.href);
       url.searchParams.set('product', String(product.id));
-      history.pushState({ product: String(product.id) }, '', url);
+      if (urlMode === 'replace') {
+        history.replaceState({ product: String(product.id) }, '', url);
+      } else {
+        history.pushState({ product: String(product.id) }, '', url);
+      }
     }
 
     const cached = steamProductCache.get(String(product.id));
@@ -1992,6 +2262,7 @@ function hasDlcTitleLabel(title) {
     modal.classList.add('hidden');
     document.body.classList.remove('modal-open');
     openedProductId = null;
+    openedProductGroupKey = null;
 
     if (updateUrl) {
       const url = new URL(window.location.href);
