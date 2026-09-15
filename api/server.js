@@ -115,6 +115,16 @@ function extractSteamPageImages(html) {
 }
 
 
+
+function isMixedCisToken(value) {
+  const token = String(value || '').normalize('NFKC').toLowerCase();
+
+  // Sellers frequently mix Latin and Cyrillic lookalikes in СНГ/CIS markers:
+  // СНГ, CНГ, СHG, CHГ, CНG, СHГ, etc. Treat all C/С + H/Н + G/Г
+  // combinations as the same seller-region token.
+  return /^[cс][hн][gг]$/u.test(token);
+}
+
 function cleanSalesTitle(value) {
   const rawTitle = String(value || '');
   const hadPercent = rawTitle.includes('%');
@@ -176,7 +186,7 @@ function cleanSalesTitle(value) {
 
   const tokens = s
     .split(/\s+/)
-    .filter(token => token && !noiseTokens.has(token));
+    .filter(token => token && !noiseTokens.has(token) && !isMixedCisToken(token));
 
   // A percentage may be written with unusual spacing and lose the '%' during cleanup.
   // Remove a lone trailing small numeric token only when the rest already looks like a title.
@@ -986,6 +996,112 @@ async function matchEditionPackageFromSteam(product, matches = null) {
   };
 }
 
+
+function extractSteamAppIdsFromSellerText(...values) {
+  const ids = [];
+  const seen = new Set();
+  const re = /(?:https?:\/\/)?(?:store\.)?steampowered\.com\/app\/(\d+)(?:[\/?#]|$)/gi;
+
+  for (const value of values) {
+    const text = String(value || '');
+    let match;
+    while ((match = re.exec(text))) {
+      const appId = String(match[1] || '').trim();
+      if (!/^\d+$/.test(appId) || seen.has(appId)) continue;
+      seen.add(appId);
+      ids.push(appId);
+    }
+  }
+
+  return ids;
+}
+
+async function sellerSteamAppCandidates(product) {
+  const productId = String(product?.id || '').trim();
+  if (!/^\d+$/.test(productId)) return [];
+
+  let details;
+  try {
+    details = await getDigisellerProductDetails(productId);
+  } catch (_) {
+    return [];
+  }
+
+  const appIds = extractSteamAppIdsFromSellerText(
+    details?.info,
+    details?.addInfo,
+    details?.collection
+  );
+  if (!appIds.length) return [];
+
+  const dlcProduct = isDlcDigisellerProduct(product);
+  const edition = editionInfo(product?.name);
+  const paidEdition = !dlcProduct && edition.tag && edition.tag !== 'standard' && !edition.flexible;
+  const candidates = [];
+
+  for (const appId of appIds.slice(0, 5)) {
+    const steam = await getSteamAppDetails(appId, 'basic');
+    if (!steam?.name) continue;
+
+    const storeType = String(steam.type || '').toLowerCase();
+    const exactBase = baseTitlesEquivalent(product?.name, steam.name);
+    const score = exactBase ? 1 : titleSimilarity(product?.name, steam.name);
+
+    // A direct Steam URL is strong evidence, but paid editions often link to
+    // the base game's app page. Use such a link as a base-game hint only; never
+    // auto-bind Deluxe/Premium/etc. to the standard app.
+    const typeCompatible = dlcProduct
+      ? (!storeType || storeType === 'dlc')
+      : (!storeType || storeType !== 'dlc');
+    const autoSafe = !paidEdition && typeCompatible && (exactBase || score >= 0.97);
+
+    candidates.push({
+      type: 'app',
+      steamId: appId,
+      name: String(steam.name),
+      storeType,
+      score: Math.round(score * 1000) / 1000,
+      confidence: autoSafe ? 1 : Math.round(score * 1000) / 1000,
+      exactBase,
+      autoSafe,
+      source: 'seller-steam-url'
+    });
+  }
+
+  return candidates.sort((a, b) => {
+    if (a.autoSafe !== b.autoSafe) return a.autoSafe ? -1 : 1;
+    if (a.exactBase !== b.exactBase) return a.exactBase ? -1 : 1;
+    return b.score - a.score;
+  });
+}
+
+async function matchFromSellerSteamUrl(product) {
+  const candidates = await sellerSteamAppCandidates(product);
+  const valid = candidates.filter(candidate => candidate.autoSafe);
+  if (!valid.length) return null;
+
+  const ids = [...new Set(valid.map(candidate => String(candidate.steamId)))];
+  if (ids.length !== 1) return null;
+
+  const best = valid.find(candidate => String(candidate.steamId) === ids[0]);
+  if (!best) return null;
+
+  return {
+    type: 'app',
+    steamId: String(best.steamId),
+    title: String(product?.name || best.name),
+    region: 'ru',
+    savedAt: new Date().toISOString(),
+    coverMode: 'steam',
+    autoMatched: true,
+    matchSource: 'seller-steam-url',
+    steamSearchName: String(best.name),
+    steamProductType: String(best.storeType || (isDlcDigisellerProduct(product) ? 'dlc' : 'app')),
+    categoryName: String(product?.categoryName || ''),
+    matchConfidence: 1
+  };
+}
+
 async function adminSteamCandidates(product, matches = null) {
   const dlcProduct = isDlcDigisellerProduct(product);
   const edition = editionInfo(product?.name);
@@ -1012,6 +1128,7 @@ async function adminSteamCandidates(product, matches = null) {
   }
 
   const query = dlcProduct ? cleanSalesTitle(product.name) : canonicalBaseGameTitle(product.name);
+  const directCandidates = await sellerSteamAppCandidates(product);
   const items = await steamStoreSearch(query);
   const candidates = items.slice(0, 8).map(item => {
     const score = dlcProduct
@@ -1026,7 +1143,16 @@ async function adminSteamCandidates(product, matches = null) {
     };
   });
 
-  return { mode: 'app', query, baseApp: null, candidates };
+  const merged = [];
+  const seen = new Set();
+  for (const candidate of [...directCandidates, ...candidates]) {
+    const key = `${candidate.type}:${candidate.steamId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(candidate);
+  }
+
+  return { mode: 'app', query, baseApp: null, candidates: merged.slice(0, 8) };
 }
 
 async function inspectSteamTarget(product, steamType, steamId, requestedCoverAppId = '') {
@@ -1245,6 +1371,7 @@ async function runAutomaticMatchSync(force = false) {
       inherited: 0,
       steamSearchMatched: 0,
       steamPackageMatched: 0,
+      sellerSteamUrlMatched: 0,
       ignored: [],
       unresolved: [],
       errors: []
@@ -1284,7 +1411,7 @@ async function runAutomaticMatchSync(force = false) {
           continue;
         }
 
-        // Truly new title: ask Steam and auto-accept only high-confidence app matches.
+        // Truly new title: ask Steam and auto-accept only high-confidence app/package matches.
         if (steamSearches < AUTO_MATCH_MAX_STEAM_SEARCHES) {
           steamSearches++;
           const steam = await matchFromSteamSearch(product, matches);
@@ -1295,6 +1422,17 @@ async function runAutomaticMatchSync(force = false) {
             else report.steamSearchMatched++;
             continue;
           }
+        }
+
+        // Last-resort high-confidence fallback: many sellers paste the exact
+        // Steam app URL into the product description. Validate that AppID against
+        // Steam and the normalized product title before accepting it.
+        const sellerSteamUrl = await matchFromSellerSteamUrl(product);
+        if (sellerSteamUrl) {
+          matches[productId] = sellerSteamUrl;
+          changed = true;
+          report.sellerSteamUrlMatched++;
+          continue;
         }
 
         report.unresolved.push({
@@ -1322,6 +1460,7 @@ async function runAutomaticMatchSync(force = false) {
         inherited: report.inherited,
         steamSearchMatched: report.steamSearchMatched,
         steamPackageMatched: report.steamPackageMatched,
+        sellerSteamUrlMatched: report.sellerSteamUrlMatched,
         ignored: report.ignored.length,
         unresolved: report.unresolved.length
       }));
@@ -2794,6 +2933,7 @@ const server = http.createServer(async (req, res) => {
         inherited: Number(sync?.inherited || 0),
         steamSearchMatched: Number(sync?.steamSearchMatched || 0),
         steamPackageMatched: Number(sync?.steamPackageMatched || 0),
+        sellerSteamUrlMatched: Number(sync?.sellerSteamUrlMatched || 0),
         ignored: Array.isArray(sync?.ignored) ? sync.ignored.length : 0,
         unresolved: Array.isArray(sync?.unresolved) ? sync.unresolved.length : 0
       }
