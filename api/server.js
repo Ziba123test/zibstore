@@ -201,7 +201,7 @@ function cleanSalesTitle(value) {
     'digital','цифровой','цифровая','цифровое','цифровые',
     'электронный','электронная','электронное','электронные',
     'tm','sm',
-    'standard','edition'
+    'standard','edition','издание','издания','издании','изданием'
   ]);
 
   const tokens = s
@@ -230,6 +230,7 @@ function editionInfo(value) {
     ['definitive', /\bdefinitive\b/i],
     ['commander', /\bcommander(?:\s+edition)?\b/i],
     ['devout', /\bdevout(?:\s+edition)?\b/i],
+    ['eclipse', /\beclipse(?:\s+edition)?\b/i],
     ['anniversary', /\banniversary\b/i],
     ['goty', /\bgoty\b|\bgame\s+of\s+the\s+year\b/i],
     ['special', /\bspecial(?:\s+edition)?\b/i],
@@ -246,7 +247,7 @@ function editionInfo(value) {
 function baseGameTitle(value) {
   return cleanSalesTitle(value)
     .replace(/\bgame\s+of\s+the\s+year\b/gi, ' ')
-    .replace(/\b(?:super\s+deluxe|premium|deluxe|ultimate|gold|complete|collector'?s?|definitive|commander|devout|anniversary|goty|special|limited|divine|eternal|bundle)(?:\s+edition)?\b/gi, ' ')
+    .replace(/\b(?:super\s+deluxe|premium|deluxe|ultimate|gold|complete|collector'?s?|definitive|commander|devout|eclipse|anniversary|goty|special|limited|divine|eternal|bundle)(?:\s+edition)?\b/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -337,7 +338,7 @@ function baseTitlesEquivalent(a, b) {
   // Steam occasionally appends a non-commercial descriptor to the base app
   // while sellers keep the cleaner retail title. Treat only known-safe aliases
   // as the same base game. This is intentionally conservative.
-  const softSuffixes = ['enhanced', 'remake'];
+  const softSuffixes = ['remake'];
   return softSuffixes.some(suffix =>
     aa === `${bb} ${suffix}` || bb === `${aa} ${suffix}`
   );
@@ -836,6 +837,105 @@ async function packageIdsForAnchorApp(appId, productTitle = '') {
   return packageIds.map(id => ({ packageId: id, hint: hints.get(id) || {} }));
 }
 
+
+function isEnhancedVersionTitle(value) {
+  return /(?:^|[^a-z0-9])enhanced(?:$|[^a-z0-9])/i.test(String(value || ''));
+}
+
+function stripEnhancedVersionTitle(value) {
+  return canonicalBaseGameTitle(value)
+    .replace(/(?:^|\s)enhanced(?:\s|$)/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function discoverEnhancedSiblingApp(product, matches = null) {
+  if (!isEnhancedVersionTitle(product?.name)) return null;
+
+  const wanted = canonicalBaseGameTitle(product?.name);
+  const baseQuery = stripEnhancedVersionTitle(product?.name);
+  if (!wanted || !baseQuery || wanted === baseQuery) return null;
+
+  const anchors = [];
+  const seenAnchors = new Set();
+  const pushAnchor = (appId, name = '', source = '') => {
+    appId = String(appId || '').trim();
+    if (!/^\d+$/.test(appId) || seenAnchors.has(appId)) return;
+    seenAnchors.add(appId);
+    anchors.push({ appId, name: String(name || ''), source });
+  };
+
+  // Reuse an already-known base/Legacy app only as a discovery anchor. It is
+  // never accepted as the final target for an Enhanced product.
+  for (const [, item] of Object.entries(matches || {})) {
+    if (!item?.steamId || item.type === 'package') continue;
+    const known = canonicalBaseGameTitle(item.steamSearchName || item.title || '');
+    if (known === baseQuery || known === `${baseQuery} legacy`) {
+      pushAnchor(item.steamId, item.steamSearchName || item.title, 'history');
+    }
+    if (anchors.length >= 4) break;
+  }
+
+  const searchItems = await steamStoreSearch(baseQuery);
+  const directExactApps = new Map();
+  for (const item of searchItems.slice(0, 16)) {
+    if (!item?.id || !item?.name) continue;
+    const name = canonicalBaseGameTitle(item.name);
+
+    // A broader base-title search sometimes returns the Enhanced app even when
+    // searching for the full "... Enhanced" phrase does not.
+    if (name === wanted) {
+      directExactApps.set(String(item.id), { appId: String(item.id), name: String(item.name) });
+    }
+
+    // Steam may expose the previous build as "... Legacy" while the Enhanced
+    // app is bundled with it. Legacy is accepted only as an anchor here.
+    if (name === baseQuery || name === `${baseQuery} legacy`) {
+      pushAnchor(item.id, item.name, 'steam-search-base');
+    }
+    if (anchors.length >= 6) break;
+  }
+
+  if (directExactApps.size === 1) return [...directExactApps.values()][0];
+
+  const exactApps = new Map();
+  for (const anchor of anchors.slice(0, 6)) {
+    const packageRefs = await packageIdsForAnchorApp(anchor.appId, product.name);
+    for (const ref of packageRefs.slice(0, 30)) {
+      const details = await getSteamPackageDetails(ref.packageId);
+      if (!details) continue;
+      for (const app of steamPackageApps(details)) {
+        if (canonicalBaseGameTitle(app.name) !== wanted) continue;
+        exactApps.set(app.id, { appId: app.id, name: app.name, anchorAppId: anchor.appId });
+      }
+    }
+  }
+
+  // Do not guess if several different exact Enhanced apps exist.
+  if (exactApps.size !== 1) return null;
+  return [...exactApps.values()][0];
+}
+
+async function matchEnhancedSiblingApp(product, matches = null) {
+  const found = await discoverEnhancedSiblingApp(product, matches);
+  if (!found) return null;
+
+  return {
+    type: 'app',
+    steamId: String(found.appId),
+    title: String(product.name || found.name),
+    region: 'ru',
+    savedAt: new Date().toISOString(),
+    coverMode: 'steam',
+    autoMatched: true,
+    matchSource: 'steam-enhanced-sibling',
+    steamSearchName: String(found.name),
+    steamProductType: 'app',
+    categoryName: String(product.categoryName || ''),
+    matchConfidence: 1
+  };
+}
+
 async function findNamedPackageAnchorApps(product, matches = null) {
   const anchors = [];
   const seen = new Set();
@@ -1291,9 +1391,29 @@ async function adminSteamCandidates(product, matches = null) {
     merged.push(candidate);
   }
 
-  const hasStrongApp = merged.some(candidate =>
+  let hasStrongApp = merged.some(candidate =>
     candidate.type === 'app' && Number(candidate.confidence ?? candidate.score ?? 0) >= 0.97
   );
+
+  if (!dlcProduct && !hasStrongApp && isEnhancedVersionTitle(product.name)) {
+    const enhanced = await discoverEnhancedSiblingApp(product, matches);
+    if (enhanced) {
+      const key = `app:${enhanced.appId}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        merged.unshift({
+          type: 'app',
+          steamId: String(enhanced.appId),
+          name: String(enhanced.name || product.name),
+          score: 1,
+          confidence: 1,
+          matchSource: 'steam-enhanced-sibling'
+        });
+      }
+      hasStrongApp = true;
+    }
+  }
+
   if (!dlcProduct && !edition.tag && !hasStrongApp) {
     const packages = await discoverNamedPackageCandidates(product, matches, { allowImplicitCollection: true });
     const implicit = packages.filter(candidate => candidate.exactTitle && !candidate.suspicious);
@@ -1444,6 +1564,11 @@ async function matchFromSteamSearch(product, matches = null) {
   const best = scored[0];
   const second = scored[1];
   if (!best) {
+    if (!dlcProduct && isEnhancedVersionTitle(product.name)) {
+      const enhanced = await matchEnhancedSiblingApp(product, matches);
+      if (enhanced) return enhanced;
+    }
+
     if (!dlcProduct && !currentEdition.tag) {
       const implicitCollection = await matchNamedPackageFromSteam(
         product,
@@ -1758,6 +1883,7 @@ function editionTagFromVariantText(value) {
     ['gold', /\bgold\b|золот/iu],
     ['definitive', /\bdefinitive\b|окончательн/iu],
     ['complete', /\bcomplete\b|полное\s+издани/iu],
+    ['eclipse', /\beclipse\b/iu],
     ['collector', /\bcollector'?s?\b|коллекцион/iu],
     ['standard', /\bstandard\b|стандарт/iu]
   ];
@@ -1774,6 +1900,7 @@ function editionLabelForTag(tag, fallback = '') {
     gold: 'Gold Edition',
     definitive: 'Definitive Edition',
     complete: 'Complete Edition',
+    eclipse: 'Eclipse Edition',
     collector: "Collector's Edition"
   };
   return labels[tag] || String(fallback || '').trim() || 'Edition';
@@ -1782,7 +1909,7 @@ function editionLabelForTag(tag, fallback = '') {
 function looksLikeEditionOption(option, variants) {
   const optionText = `${digisellerOptionLabel(option)} ${String(option?.type || '')}`.toLowerCase();
   const variantsText = variants.map(v => String(v?.text || '')).join(' ').toLowerCase();
-  return /издани|edition|deluxe|premium|ultimate|gold|standard|super\s+deluxe|definitive|complete|commander|collector|goty|game\s+of\s+the\s+year/i
+  return /издани|edition|deluxe|premium|ultimate|gold|standard|super\s+deluxe|definitive|complete|commander|collector|eclipse|goty|game\s+of\s+the\s+year/i
     .test(`${optionText} ${variantsText}`);
 }
 
