@@ -1,0 +1,10 @@
+ZibStore v109 — fixed modal commercial controls
+
+Changed:
+- Price / saving / delivery method / Buy button are grouped into one block.
+- On the modal upper panel this block is pinned to the bottom, immediately above Description / Reviews.
+- Different title heights no longer move this commercial block vertically.
+- Russian localization remains under the artwork.
+
+Files changed:
+- index.html

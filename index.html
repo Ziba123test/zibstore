@@ -209,13 +209,16 @@
             </div>
           </div>
 
-          <div class="p-4 sm:p-5 lg:min-w-0">
+          <div class="flex flex-col p-4 sm:p-5 lg:min-w-0">
             <div class="pr-12">
               <h2 id="product-modal-title" class="font-display text-2xl font-bold leading-tight sm:text-3xl"></h2>
               <p id="product-modal-subtitle" class="mt-2 text-sm leading-relaxed text-nox-muted"></p>
             </div>
 
-            <div class="mt-3 overflow-hidden rounded-xl border border-nox-border bg-nox-card/60">
+            <!-- Keep commercial controls pinned to the bottom of the upper panel,
+                 directly above Description/Reviews, regardless of title height. -->
+            <div class="mt-auto pt-3">
+            <div class="overflow-hidden rounded-xl border border-nox-border bg-nox-card/60">
               <div class="grid sm:grid-cols-2">
                 <div class="p-3 sm:border-r sm:border-nox-border">
                   <div class="text-[10px] uppercase tracking-wide text-nox-muted">Цена предложения</div>
@@ -268,6 +271,7 @@
             >
               Купить
             </a>
+            </div>
           </div>
         </div>
 
