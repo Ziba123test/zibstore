@@ -1408,7 +1408,7 @@ function hasDlcTitleLabel(title) {
     if (/\bpremium\b|премиум/iu.test(title)) return 'premium';
     if (/\bultimate\b|ультимейт/iu.test(title)) return 'ultimate';
     if (/\bgold(?:\s+edition)?\b|золотое\s+издание/iu.test(title)) return 'gold';
-    if (/\b(?:complete|goty|collector[’']?s?|anniversary|special|divine|eternal)\s+edition\b|\bgoty\b|game\s+of\s+the\s+year|полное\s+издание/iu.test(title)) return 'other';
+    if (/\b(?:complete|goty|collector[’']?s?|anniversary|special|divine|eternal|devout)\s+edition\b|\bgoty\b|game\s+of\s+the\s+year|полное\s+издание/iu.test(title)) return 'other';
     // No separate base/unknown bucket in the UI. Only explicit upgrades in
     // full-game editions are classified; release names are not extra editions.
     return '';
@@ -1425,8 +1425,12 @@ function hasDlcTitleLabel(title) {
 
     const title = String(product?.name || '').normalize('NFKC');
 
+    const savedMatch = serverSteamMatches[String(product?.id || '')] || {};
+    if (savedMatch.packageKind === 'collection' || savedMatch.packageEdition === 'devout') return true;
+
     return /\bdefinitive(?:\s+edition)?\b/i.test(title)
       || /\bcommander(?:\s+edition)?\b/i.test(title)
+      || /\bdevout(?:\s+edition)?\b/i.test(title)
       || /\b(?:trilogy|collection|anthology|compilation)\b/i.test(title)
       || /\bfranchise\s+pack\b/i.test(title)
       || /\bbundle\b/i.test(title);
@@ -1524,6 +1528,7 @@ function hasDlcTitleLabel(title) {
       ['gold', /\bgold(?:\s+edition)?\b|золотое\s+издание/iu],
       ['definitive', /\bdefinitive(?:\s+edition)?\b/iu],
       ['commander', /\bcommander(?:\s+edition)?\b/iu],
+      ['devout', /\bdevout(?:\s+edition)?\b/iu],
       ['complete', /\bcomplete(?:\s+edition)?\b|полное\s+издание/iu],
       ['trilogy', /\btrilogy\b/iu],
       ['collection', /\bcollection\b/iu],
@@ -1544,7 +1549,7 @@ function hasDlcTitleLabel(title) {
     s = s.replace(/\((?:19|20)\d{2}\)/g, ' ');
     s = s.replace(/(?:steam\s*gift|steam\s*auto|автодоставка|гифт|gift|ключ|\bkey\b)/giu, ' ');
     s = s.replace(/(?:ру|рф|снг|мир|латам|тр|ua|ru|rf|by|kz|tr|ar|cis|latam|world|global)/giu, ' ');
-    s = s.replace(/\b(?:deluxe|premium|ultimate|gold|complete|collector'?s?|definitive|commander|anniversary|goty|special|divine|eternal|bundle|trilogy|collection|anthology|compilation|franchise\s+pack)(?:\s+edition)?\b/giu, ' ');
+    s = s.replace(/\b(?:deluxe|premium|ultimate|gold|complete|collector'?s?|definitive|commander|devout|anniversary|goty|special|divine|eternal|bundle|trilogy|collection|anthology|compilation|franchise\s+pack)(?:\s+edition)?\b/giu, ' ');
     s = s.replace(/[^\p{L}\p{N}]+/gu, ' ');
     return s.trim();
   }
