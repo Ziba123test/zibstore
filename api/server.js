@@ -471,6 +471,33 @@ function historicalCandidates(product, matches, limit = 5) {
     .slice(0, Math.max(1, limit));
 }
 
+function shouldRematchVirtualPaidEdition(product, matches) {
+  if (!product?.isEditionVariant || !product?.sourceProductId) return false;
+
+  const tag = String(product.editionVariantTag || editionInfo(product.name).tag || '');
+  if (!tag || tag === 'standard') return false;
+
+  const current = matches?.[String(product.id)];
+  if (!current?.steamId) return false;
+
+  // A paid/special edition represented as a Digiseller virtual variant should
+  // normally compare against a Steam package/SubID, not the base AppID. Older
+  // builds could save the parent's base-app match before the variant tag was
+  // recognized correctly (e.g. Super Deluxe -> Borderlands 4 base app).
+  if (current.type !== 'package') return true;
+
+  // If both parent and child point to the exact same Steam target, the child did
+  // not get an edition-specific package. Re-evaluate it conservatively.
+  const parent = matches?.[String(product.sourceProductId)];
+  if (parent?.steamId &&
+      String(parent.type || 'app') === String(current.type || 'app') &&
+      String(parent.steamId) === String(current.steamId)) {
+    return true;
+  }
+
+  return false;
+}
+
 function cloneDefaultVariantParentMatch(product, matches) {
   if (!product?.isEditionVariant || !product?.sourceProductId) return null;
 
@@ -1419,6 +1446,7 @@ async function runAutomaticMatchSync(force = false) {
       scanned: 0,
       alreadyMatched: 0,
       inherited: 0,
+      repaired: 0,
       steamSearchMatched: 0,
       steamPackageMatched: 0,
       sellerSteamUrlMatched: 0,
@@ -1445,6 +1473,16 @@ async function runAutomaticMatchSync(force = false) {
             reason: 'non_game_service'
           });
           continue;
+        }
+
+        // Repair stale mappings created before virtual edition tags were fully
+        // understood. In particular, a Super/Deluxe virtual variant must not
+        // keep the parent's base AppID, otherwise the storefront shows the base
+        // Steam price for an expensive edition.
+        if (shouldRematchVirtualPaidEdition(product, matches)) {
+          delete matches[productId];
+          changed = true;
+          report.repaired = Number(report.repaired || 0) + 1;
         }
 
         if (matches[productId]?.steamId) {
@@ -1520,6 +1558,7 @@ async function runAutomaticMatchSync(force = false) {
         scanned: report.scanned,
         alreadyMatched: report.alreadyMatched,
         inherited: report.inherited,
+        repaired: report.repaired,
         steamSearchMatched: report.steamSearchMatched,
         steamPackageMatched: report.steamPackageMatched,
         sellerSteamUrlMatched: report.sellerSteamUrlMatched,
