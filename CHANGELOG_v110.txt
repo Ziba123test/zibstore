@@ -1,0 +1,23 @@
+ZibStore v110 — Onimusha Deluxe Steam package matching
+
+Изменённый файл:
+- api/server.js
+
+Причина:
+Steam называет Deluxe-пакет сокращённо:
+- Digiseller: Onimusha: Way of the Sword — Deluxe
+- Steam: Onimusha: WotS - Deluxe Edition
+
+Из-за WotS прежняя логика считала базовые названия разными и показывала около 27% совпадения.
+
+Исправление:
+- добавлено безопасное сравнение сокращённого подзаголовка по инициалам после общего префикса;
+- "Onimusha: Way of the Sword" теперь считается эквивалентом "Onimusha: WotS";
+- правило применяется только при наличии общего префикса и точного совпадения initialism, чтобы не расширять автопривязку слишком сильно.
+
+Ожидаемые сопоставления:
+- Standard -> AppID 2638890
+- Deluxe -> Package/SubID 1661303, coverAppId 2638890
+- Premium Deluxe остаётся отдельным Package/SubID 1661305 и не будет выбран для обычного Deluxe, потому что edition tag = premium.
+
+Frontend/index.html не изменён.
