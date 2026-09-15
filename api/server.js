@@ -180,6 +180,8 @@ function cleanSalesTitle(value) {
     'кз','тр','ар','латам',
     'chг','chн','снg','снг',
     'world','global','worldwide',
+    'digital','цифровой','цифровая','цифровое','цифровые',
+    'электронный','электронная','электронное','электронные',
     'tm','sm',
     'standard','edition'
   ]);
@@ -1601,6 +1603,60 @@ function extractEditionOptions(rawProduct) {
   }).filter(option => option.editionLike && /^\d+$/.test(option.id) && option.variants.length >= 2);
 }
 
+
+function extractSelectableDigisellerOptions(rawProduct) {
+  return flattenDigisellerOptions(rawProduct?.options || []).map(option => {
+    const variants = digisellerOptionVariants(option).map(variant => ({
+      value: String(variant?.value ?? variant?.id ?? '').trim(),
+      text: String(variant?.text || '').trim(),
+      default: Number(variant?.default || 0),
+      visible: Number(variant?.visible ?? 1),
+      isAvailable: Number(variant?.is_available ?? 1)
+    })).filter(v => /^\d+$/.test(v.value));
+
+    return {
+      id: digisellerOptionId(option),
+      label: digisellerOptionLabel(option),
+      type: String(option?.type || ''),
+      required: Number(option?.required ?? 0),
+      variants
+    };
+  }).filter(option => /^\d+$/.test(option.id) && option.variants.length);
+}
+
+function safeDefaultDigisellerVariant(option) {
+  const available = (option?.variants || []).filter(v => v.visible !== 0 && v.isAvailable !== 0);
+  if (!available.length) return null;
+  const defaults = available.filter(v => v.default === 1);
+  if (defaults.length === 1) return defaults[0];
+  if (available.length === 1) return available[0];
+  return null;
+}
+
+function buildDigisellerCheckoutSelections(rawProduct, optionId, variantId) {
+  const allOptions = extractSelectableDigisellerOptions(rawProduct);
+  const selectedOption = allOptions.find(item => String(item.id) === String(optionId));
+  if (!selectedOption) throw new Error('Edition option not found for this product');
+
+  const selectedVariant = selectedOption.variants.find(item => String(item.value) === String(variantId));
+  if (!selectedVariant) throw new Error('Edition variant not found for this product');
+  if (selectedVariant.visible === 0 || selectedVariant.isAvailable === 0) throw new Error('Selected edition is unavailable');
+
+  const selections = [{ id: Number(selectedOption.id), value: { id: Number(selectedVariant.value) } }];
+  for (const option of allOptions) {
+    if (String(option.id) === String(selectedOption.id)) continue;
+    const fallback = safeDefaultDigisellerVariant(option);
+    if (!fallback) continue;
+    selections.push({ id: Number(option.id), value: { id: Number(fallback.value) } });
+  }
+  return { allOptions, selectedOption, selectedVariant, selections };
+}
+
+function missingDigisellerParameterId(message) {
+  const m = String(message || '').match(/(?:параметр(?:а|у)?|parameter)\s*(\d+)/iu);
+  return m ? String(m[1]) : '';
+}
+
 function shouldInspectEditionVariants(product) {
   const title = String(product?.name || '');
   return /выбор\s+издани|(?:standard|deluxe|premium|ultimate|gold)\s*[\\/|+]\s*(?:standard|deluxe|premium|ultimate|gold)|издани.*(?:standard|deluxe|premium)|(?:standard|deluxe|premium).*издани/i.test(title);
@@ -3011,29 +3067,55 @@ async function createDigisellerPurchaseOption({ productId, optionId, variantId, 
   if (!variant) throw new Error('Edition variant not found for this product');
   if (variant.visible === 0 || variant.isAvailable === 0) throw new Error('Selected edition is unavailable');
 
-  const response = await fetch(`${DIGISELLER_API_BASE}/purchases/options`, {
-    method: 'POST',
-    headers: {
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
-      'User-Agent': 'ZibStore/1.0'
-    },
-    body: JSON.stringify({
-      product_id: Number(productId),
-      options: [{ id: Number(optionId), value: { id: Number(variantId) } }],
-      unit_cnt: 0,
-      lang: 'ru-RU',
-      ip: String(ip || '')
-    })
-  });
+  const checkout = buildDigisellerCheckoutSelections(raw, optionId, variantId);
+  const selections = [...checkout.selections];
 
-  const text = await response.text();
-  let data;
-  try {
-    data = JSON.parse(text.replace(/^\uFEFF/, ''));
-  } catch (_) {
-    throw new Error(`Digiseller returned invalid JSON (HTTP ${response.status})`);
+  const send = async () => {
+    const response = await fetch(`${DIGISELLER_API_BASE}/purchases/options`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'ZibStore/1.0'
+      },
+      body: JSON.stringify({
+        product_id: Number(productId),
+        options: selections,
+        unit_cnt: 0,
+        lang: 'ru-RU',
+        ip: String(ip || '')
+      })
+    });
+
+    const text = await response.text();
+    let data;
+    try {
+      data = JSON.parse(text.replace(/^\uFEFF/, ''));
+    } catch (_) {
+      throw new Error(`Digiseller returned invalid JSON (HTTP ${response.status})`);
+    }
+    return { response, data };
+  };
+
+  let attempt = await send();
+  for (let retry = 0; retry < 3; retry++) {
+    if (attempt.response.ok && Number(attempt.data?.retval ?? -1) === 0 && Number(attempt.data?.id_po)) break;
+
+    const missingId = missingDigisellerParameterId(attempt.data?.retdesc);
+    if (!missingId || selections.some(item => String(item.id) === missingId)) break;
+
+    const missingOption = checkout.allOptions.find(item => String(item.id) === missingId);
+    const fallback = safeDefaultDigisellerVariant(missingOption);
+    if (!missingOption || !fallback) {
+      const label = missingOption?.label ? ` «${missingOption.label}»` : '';
+      throw new Error(`Для товара требуется дополнительный выбор${label}; автоматическое значение не определено`);
+    }
+
+    selections.push({ id: Number(missingOption.id), value: { id: Number(fallback.value) } });
+    attempt = await send();
   }
+
+  const { response, data } = attempt;
   if (!response.ok || Number(data?.retval ?? -1) !== 0 || !Number(data?.id_po)) {
     throw new Error(data?.retdesc || `Digiseller checkout option failed (HTTP ${response.status})`);
   }
