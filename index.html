@@ -1559,13 +1559,33 @@ function hasDlcTitleLabel(title) {
     const saved = serverSteamMatches[productId];
     const exact = STEAM_PRICE_MAP.byDigisellerId[productId];
 
-    let identity = `name:${normalizeCatalogGroupTitle(product?.name) || productId}`;
+    let targetType = '';
+    let targetId = '';
+
     if (saved && saved.steamId) {
-      identity = `${saved.type === 'package' ? 'package' : 'app'}:${String(saved.steamId)}`;
+      targetType = saved.type === 'package' ? 'package' : 'app';
+      targetId = String(saved.steamId);
     } else if (exact && exact.id) {
-      identity = `${exact.type === 'package' ? 'package' : 'app'}:${String(exact.id)}`;
+      targetType = exact.type === 'package' ? 'package' : 'app';
+      targetId = String(exact.id);
     }
 
+    // A Steam Package/SubID already represents one exact commercial edition.
+    // Do not split the same package again by seller wording such as
+    // "Premium", "Premium Deluxe" or by a noisy DLC classifier.
+    // If Key and Gift point to the same SubID, they are the same edition and
+    // should be one storefront card with delivery-method switching.
+    if (targetType === 'package' && targetId) {
+      return `package:${targetId}`;
+    }
+
+    const identity = targetType && targetId
+      ? `${targetType}:${targetId}`
+      : `name:${normalizeCatalogGroupTitle(product?.name) || productId}`;
+
+    // AppID alone can represent the base game while sellers distinguish
+    // Standard/Deluxe-like offers, so keep the edition/DLC discriminators for
+    // apps and title-only fallbacks.
     return `${identity}|edition:${getEditionGroupingKey(product)}|dlc:${isDlcProduct(product) ? 1 : 0}`;
   }
 

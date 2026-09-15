@@ -1,0 +1,14 @@
+ZibStore v118 — grouping Key/Gift by exact Steam Package
+
+Changed:
+- index.html
+
+Fix:
+- Products mapped to the same Steam Package/SubID are now grouped as one commercial edition regardless of seller wording (e.g. Premium Edition vs Premium Deluxe Edition).
+- Exact Package identity takes precedence over redundant edition/DLC title classifiers.
+- AppID-based grouping keeps the existing edition and DLC safeguards.
+
+Example:
+- Onimusha Premium Deluxe Gift -> package 1661305
+- Onimusha Premium Key virtual variant -> package 1661305
+=> one storefront card with Key/Gift switch.
