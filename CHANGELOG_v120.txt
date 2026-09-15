@@ -1,0 +1,26 @@
+ZibStore v120 — Eclipse Edition + GTA V Enhanced
+
+Изменённые файлы:
+- api/server.js
+- index.html
+
+Исправлено:
+1. The Blood of Dawnwalker — Eclipse Edition
+   - Eclipse теперь распознаётся как полноценное коммерческое издание.
+   - Виртуальный вариант «Издание Eclipse» получает отдельный тег eclipse.
+   - При сравнении базовой игры слова Eclipse/«издание» корректно удаляются.
+   - Eclipse-вариант может наследовать уже известный точный Steam Package того же издания (Key/Gift).
+   - Eclipse учитывается как «Расширенное» без отдельной обязательной плашки.
+
+2. Grand Theft Auto V Enhanced
+   - Enhanced больше не считается безопасным синонимом обычной базовой игры.
+   - Добавлен безопасный поиск отдельного Enhanced AppID:
+     * сначала точный поиск;
+     * затем поиск по базовому названию;
+     * затем поиск Enhanced-приложения внутри Steam-пакетов базовой/Legacy версии.
+   - Legacy может использоваться только как поисковый якорь и никогда не сохраняется как итоговый Steam target для Enhanced.
+   - В админке такой найденный Enhanced AppID также отображается как кандидат с confidence=1.
+
+Ожидаемые Steam targets:
+- The Blood of Dawnwalker — Eclipse Edition -> Package 1543137 (при совпадении с уже известным Gift-пакетом)
+- Grand Theft Auto V Enhanced -> AppID 3240220
