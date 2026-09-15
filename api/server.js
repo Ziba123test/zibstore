@@ -151,6 +151,7 @@ function cleanSalesTitle(value) {
     /весь\s+мир/giu,
     /для\s+россии/giu,
     /standard\s+edition/giu,
+    /стандарт[а-яё]*\s+издани[а-яё]*/giu,
     /steam\s+auto/giu,
 
     // Digiseller sellers often append service/commission percentages to titles:
@@ -202,11 +203,11 @@ function cleanSalesTitle(value) {
 function editionInfo(value) {
   const s = String(value || '').toLowerCase();
   const tags = [
-    ['super_deluxe', /\bsuper\s+deluxe\b|\bсупер\s+делюкс\b/i],
-    ['premium', /\bpremium\b|\bпремиум\b/i],
-    ['deluxe', /\bdeluxe\b|\bделюкс\b/i],
-    ['ultimate', /\bultimate\b/i],
-    ['gold', /\bgold\b/i],
+    ['super_deluxe', /\bsuper\s+deluxe\b|супер\s+делюкс/iu],
+    ['premium', /\bpremium\b|премиум/iu],
+    ['deluxe', /\bdeluxe\b|делюкс/iu],
+    ['ultimate', /\bultimate\b|ультимейт/iu],
+    ['gold', /\bgold\b|золот(?:ое|ой|ая|ые)?(?:\s+издани[ея])?/iu],
     ['complete', /\bcomplete\b/i],
     ['collector', /\bcollector'?s?\b/i],
     ['definitive', /\bdefinitive\b/i],
@@ -218,7 +219,7 @@ function editionInfo(value) {
     ['divine', /\bdivine(?:\s+edition)?\b/i],
     ['eternal', /\beternal(?:\s+edition)?\b/i],
     ['bundle', /\bbundle\b/i],
-    ['standard', /\bstandard(?:\s+edition)?\b/i]
+    ['standard', /\bstandard(?:\s+edition)?\b|стандарт[а-яё]*(?:\s+издани[а-яё]*)?/iu]
   ];
   const hit = tags.find(([, re]) => re.test(s));
   return { tag: hit ? hit[0] : null, flexible: /выбор\s+издания/i.test(s) };
@@ -445,8 +446,8 @@ function historicalCandidates(product, matches, limit = 5) {
     if (!item?.steamId || !item?.title) continue;
     if (String(oldProductId) === String(product.id)) continue;
 
-    const score = titleSimilarity(product.name, item.title);
     const sameBase = baseTitlesEquivalent(product.name, item.title);
+    const score = sameBase ? 1 : titleSimilarity(product.name, item.title);
     const editionOk = editionsCompatible(product.name, item.title);
 
     candidates.push({
@@ -468,6 +469,34 @@ function historicalCandidates(product, matches, limit = 5) {
       return b.score - a.score;
     })
     .slice(0, Math.max(1, limit));
+}
+
+function cloneDefaultVariantParentMatch(product, matches) {
+  if (!product?.isEditionVariant || !product?.sourceProductId) return null;
+
+  const editionTag = String(product.editionVariantTag || editionInfo(product.name).tag || '');
+  const isDefaultVariant = Boolean(product.editionVariantDefault) || editionTag === 'standard';
+  if (!isDefaultVariant) return null;
+
+  const parentId = String(product.sourceProductId);
+  const source = matches?.[parentId];
+  if (!source?.steamId) return null;
+
+  return {
+    type: source.type === 'package' ? 'package' : 'app',
+    steamId: String(source.steamId),
+    title: String(product.name || source.title || ''),
+    region: 'ru',
+    savedAt: new Date().toISOString(),
+    coverMode: source.coverMode || 'steam',
+    ...(source.coverAppId ? { coverAppId: String(source.coverAppId) } : {}),
+    ...(source.coverUrl ? { coverUrl: String(source.coverUrl) } : {}),
+    ...(source.coverSource ? { coverSource: String(source.coverSource) } : {}),
+    autoMatched: true,
+    matchSource: 'parent-default-variant',
+    matchedFromProductId: parentId,
+    matchConfidence: 1
+  };
 }
 
 function cloneHistoricalMatch(product, matches) {
@@ -1423,6 +1452,18 @@ async function runAutomaticMatchSync(force = false) {
           continue;
         }
 
+        // A virtual default/Standard edition may safely inherit the mapping of
+        // its parent Digiseller product. The storefront already used this fallback;
+        // persist it here as a real virtual-product match so Admin and storefront
+        // agree and the item no longer remains in the unresolved list.
+        const parentVariant = cloneDefaultVariantParentMatch(product, matches);
+        if (parentVariant) {
+          matches[productId] = parentVariant;
+          changed = true;
+          report.inherited++;
+          continue;
+        }
+
         // Safest case: same game was previously sold under another Digiseller Product ID.
         const inherited = cloneHistoricalMatch(product, matches);
         if (inherited) {
@@ -1542,15 +1583,15 @@ function flattenDigisellerOptions(value, out = []) {
 function editionTagFromVariantText(value) {
   const s = String(value || '').toLowerCase();
   const rules = [
-    ['super_deluxe', /\bsuper\s+deluxe\b|\bсупер\s+делюкс\b/i],
-    ['premium', /\bpremium\b|\bпремиум\b/i],
-    ['deluxe', /\bdeluxe\b|\bделюкс\b/i],
-    ['ultimate', /\bultimate\b|\bультимейт\b/i],
-    ['gold', /\bgold\b|\bзолот/i],
-    ['definitive', /\bdefinitive\b|\bокончательн/i],
-    ['complete', /\bcomplete\b|\bполное\s+издани/i],
-    ['collector', /\bcollector'?s?\b|\bколлекцион/i],
-    ['standard', /\bstandard\b|\bстандарт/i]
+    ['super_deluxe', /\bsuper\s+deluxe\b|супер\s+делюкс/iu],
+    ['premium', /\bpremium\b|премиум/iu],
+    ['deluxe', /\bdeluxe\b|делюкс/iu],
+    ['ultimate', /\bultimate\b|ультимейт/iu],
+    ['gold', /\bgold\b|золот/iu],
+    ['definitive', /\bdefinitive\b|окончательн/iu],
+    ['complete', /\bcomplete\b|полное\s+издани/iu],
+    ['collector', /\bcollector'?s?\b|коллекцион/iu],
+    ['standard', /\bstandard\b|стандарт/iu]
   ];
   return rules.find(([, re]) => re.test(s))?.[0] || '';
 }
