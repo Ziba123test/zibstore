@@ -1,0 +1,15 @@
+ZibStore v119 — DLC title alias + Key/Gift fallback grouping
+
+Изменены:
+- api/server.js
+- index.html
+
+Исправления:
+1. Названия вида «Откровения» (Revelations) нормализуются к официальному английскому подзаголовку для Steam-поиска.
+2. В fallback-группировке каталога полностью удаляется служебное слово Steam, поэтому STEAM КЛЮЧ и Steam Gift одного DLC не расходятся по разным карточкам до/без Steam-match.
+3. Логика общая и не привязана к конкретному Product ID.
+
+Целевой пример:
+DOOM: The Dark Ages — «Откровения» (Revelations) DLC
+→ DOOM: The Dark Ages | Revelations
+→ Key + Gift должны объединиться после корректного AppID-сопоставления.

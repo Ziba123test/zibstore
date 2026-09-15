@@ -1547,8 +1547,20 @@ function hasDlcTitleLabel(title) {
     s = s.replace(/[™®©℠]/g, ' ');
     s = s.replace(/[\u{1F000}-\u{1FAFF}\uFE0F]/gu, ' ');
     s = s.replace(/\((?:19|20)\d{2}\)/g, ' ');
-    s = s.replace(/(?:steam\s*gift|steam\s*auto|автодоставка|гифт|gift|ключ|\bkey\b)/giu, ' ');
-    s = s.replace(/(?:ру|рф|снг|мир|латам|тр|ua|ru|rf|by|kz|tr|ar|cis|latam|world|global)/giu, ' ');
+
+    // Collapse localized + official-English subtitle pairs such as
+    // «Откровения» (Revelations) to the Steam-facing English alias. This keeps
+    // Key/Gift fallbacks grouped even before a Steam AppID has been resolved.
+    s = s.replace(
+      /[«“"]([^»”"]*[\p{Script=Cyrillic}][^»”"]*)[»”"]\s*\(\s*([a-z][a-z0-9:'’&.\- ]{1,80})\s*\)/gu,
+      ' $2 '
+    );
+
+    // Remove delivery/platform boilerplate. In particular, remove standalone
+    // "steam" too: "STEAM КЛЮЧ" previously left an extra "steam" token while
+    // "Steam Gift" was removed as a whole, splitting Key and Gift cards.
+    s = s.replace(/(?:steam\s*gift|steam\s*auto|автодоставка|гифт|gift|ключ|\bkey\b|\bsteam\b)/giu, ' ');
+    s = s.replace(/(?<![\p{L}\p{N}])(?:ру|рф|снг|мир|латам|тр|ua|ru|rf|by|kz|tr|ar|cis|latam|world|global)(?![\p{L}\p{N}])/giu, ' ');
     s = s.replace(/\b(?:deluxe|premium|ultimate|gold|complete|collector'?s?|definitive|commander|devout|anniversary|goty|special|divine|eternal|bundle|trilogy|collection|anthology|compilation|franchise\s+pack)(?:\s+edition)?\b/giu, ' ');
     s = s.replace(/[^\p{L}\p{N}]+/gu, ' ');
     return s.trim();
