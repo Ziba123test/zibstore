@@ -1,0 +1,16 @@
+ZibStore v117 — Devout Edition + implicit Collection matching
+
+Changed:
+- api/server.js
+- index.html
+
+Backend:
+- Devout Edition is recognized as a paid full-game edition and resolves through Steam Package/SubID, not an Upgrade DLC AppID.
+- A seller title may safely match a Steam package whose only extra trailing word is "Collection".
+- Added a conservative franchise-prefix anchor (text before ':') for package discovery.
+- Admin search shows implicit Collection package candidates when ordinary AppID matching has no strong result.
+- Automatic matching prefers no Steam price over binding a paid edition/collection to the wrong AppID.
+
+Frontend:
+- Devout Edition counts as "Расширенное" without adding a new badge or dedicated dropdown item.
+- A backend packageKind=collection also counts as expanded even if seller omitted the word Collection.
