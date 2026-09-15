@@ -498,6 +498,12 @@ function shouldRematchVirtualPaidEdition(product, matches) {
   return false;
 }
 
+function isVirtualPaidEdition(product) {
+  if (!product?.isEditionVariant) return false;
+  const tag = String(product.editionVariantTag || editionInfo(product.name).tag || '');
+  return Boolean(tag && tag !== 'standard');
+}
+
 function cloneDefaultVariantParentMatch(product, matches) {
   if (!product?.isEditionVariant || !product?.sourceProductId) return null;
 
@@ -527,8 +533,25 @@ function cloneDefaultVariantParentMatch(product, matches) {
 }
 
 function cloneHistoricalMatch(product, matches) {
+  const wantedEdition = String(product?.editionVariantTag || editionInfo(product?.name).tag || '');
+  const paidVirtualEdition = isVirtualPaidEdition(product);
+
   const candidates = historicalCandidates(product, matches, 20)
-    .filter(c => c.editionCompatible);
+    .filter(c => {
+      if (!c.editionCompatible) return false;
+
+      // Never let a paid virtual edition inherit the parent's/base AppID just
+      // because the parent title says "Выбор издания". That was the cause of
+      // Super Deluxe Borderlands showing the Standard Steam price.
+      if (paidVirtualEdition) {
+        if (c.type !== 'package') return false;
+        const source = matches?.[c.oldProductId] || {};
+        const sourceEdition = String(source.packageEdition || editionInfo(source.title || c.knownTitle).tag || '');
+        if (!sourceEdition || sourceEdition !== wantedEdition) return false;
+      }
+
+      return true;
+    });
 
   if (!candidates.length) return null;
 
@@ -1502,7 +1525,27 @@ async function runAutomaticMatchSync(force = false) {
           continue;
         }
 
-        // Safest case: same game was previously sold under another Digiseller Product ID.
+        const paidVirtualEdition = isVirtualPaidEdition(product);
+
+        // Paid virtual editions are special: resolve their edition-specific
+        // Steam Package/SubID BEFORE any historical inheritance. The base AppID
+        // is useful only as an anchor for package discovery, never as the final
+        // comparison target for Deluxe/Super Deluxe/etc.
+        if (paidVirtualEdition && steamSearches < AUTO_MATCH_MAX_STEAM_SEARCHES) {
+          steamSearches++;
+          const steam = await matchFromSteamSearch(product, matches);
+          if (steam) {
+            matches[productId] = steam;
+            changed = true;
+            if (steam.type === 'package') report.steamPackageMatched++;
+            else report.steamSearchMatched++;
+            continue;
+          }
+        }
+
+        // Safest historical case: same game/edition was previously sold under
+        // another Digiseller Product ID. For paid virtual editions this helper
+        // accepts only a package with the exact same edition tag.
         const inherited = cloneHistoricalMatch(product, matches);
         if (inherited) {
           matches[productId] = inherited;
@@ -1511,8 +1554,11 @@ async function runAutomaticMatchSync(force = false) {
           continue;
         }
 
-        // Truly new title: ask Steam and auto-accept only high-confidence app/package matches.
-        if (steamSearches < AUTO_MATCH_MAX_STEAM_SEARCHES) {
+        // Truly new ordinary title: ask Steam and auto-accept only
+        // high-confidence app/package matches. Paid virtual editions already
+        // tried the package-specific path above, so do not spend the same search
+        // budget twice in one sync pass.
+        if (!paidVirtualEdition && steamSearches < AUTO_MATCH_MAX_STEAM_SEARCHES) {
           steamSearches++;
           const steam = await matchFromSteamSearch(product, matches);
           if (steam) {
