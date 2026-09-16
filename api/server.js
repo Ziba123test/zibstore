@@ -142,8 +142,33 @@ function collapseTranslatedSellerAlias(value) {
   return s;
 }
 
+function isEldenRingShadowErdtreeTitle(value) {
+  return /\belden\s+ring\s+shadow\s+of\s+the\s+erdtree\b/i.test(
+    String(value || '').normalize('NFKC')
+  );
+}
+
+function isEldenRingShadowErdtreeDeluxeAlias(value) {
+  return /\belden\s+ring\s+shadow\s+of\s+the\s+erdtree\s+de(?=\s*(?:[*+|/\\()[\]{}<>—–_-]|$))/i.test(
+    String(value || '').normalize('NFKC')
+  );
+}
+
+function isEldenRingShadowErdtreeEditionPackage(value) {
+  const s = String(value || '').normalize('NFKC');
+  return /\belden\s+ring\s+shadow\s+of\s+the\s+erdtree\s+edition\b/i.test(s)
+    && !/\bdeluxe\s+edition\b/i.test(s);
+}
+
+function expandKnownEditionAliases(value) {
+  return String(value || '').normalize('NFKC').replace(
+    /(\belden\s+ring\s+shadow\s+of\s+the\s+erdtree)\s+de(?=\s*(?:[*+|/\\()[\]{}<>—–_-]|$))/ig,
+    '$1 Deluxe Edition'
+  );
+}
+
 function cleanSalesTitle(value) {
-  const rawTitle = collapseTranslatedSellerAlias(value);
+  const rawTitle = collapseTranslatedSellerAlias(expandKnownEditionAliases(value));
   const hadPercent = rawTitle.includes('%');
 
   let s = rawTitle
@@ -219,7 +244,7 @@ function cleanSalesTitle(value) {
 }
 
 function editionInfo(value) {
-  const s = String(value || '').toLowerCase();
+  const s = expandKnownEditionAliases(value).toLowerCase();
   const tags = [
     ['super_deluxe', /\bsuper\s+deluxe\b|супер\s+делюкс/iu],
     ['premium', /\bpremium\b|премиум/iu],
@@ -445,9 +470,18 @@ function isDlcDigisellerProduct(product) {
   const category = String(product?.categoryName || product?._categoryName || '')
     .normalize('NFKC')
     .toLowerCase();
-  const name = String(product?.name || '')
-    .normalize('NFKC')
-    .toLowerCase();
+  const rawName = String(product?.name || '').normalize('NFKC');
+  const name = rawName.toLowerCase();
+
+  // Steam sells three different Shadow of the Erdtree commerce targets:
+  //   - Shadow of the Erdtree                -> standalone DLC AppID 2778580
+  //   - Shadow of the Erdtree Edition        -> full game + DLC package 1010505
+  //   - seller suffix DE                     -> Deluxe Edition package
+  // Keep the full "... Edition" package out of DLC classification.
+  if (isEldenRingShadowErdtreeEditionPackage(rawName)) return false;
+  if (isEldenRingShadowErdtreeTitle(rawName) && !isEldenRingShadowErdtreeDeluxeAlias(rawName)) {
+    return true;
+  }
 
   return (
     /дополн/iu.test(category) ||
@@ -1114,6 +1148,40 @@ async function matchNamedPackageFromSteam(product, matches = null, { allowImplic
   };
 }
 
+async function matchEldenRingShadowErdtreeEditionPackage(product) {
+  if (!isEldenRingShadowErdtreeEditionPackage(product?.name)) return null;
+
+  // This is the Steam store package containing both ELDEN RING and the
+  // Shadow of the Erdtree DLC. It is not the standalone DLC price target.
+  const packageId = '1010505';
+  const coverAppId = '1245620';
+  const details = await getSteamPackageDetails(packageId);
+  if (!details) return null;
+
+  const steamName = String(details.name || '').normalize('NFKC').trim();
+  if (!/\belden\s+ring\s+shadow\s+of\s+the\s+erdtree\s+edition\b/i.test(steamName)) return null;
+
+  const apps = steamPackageApps(details);
+  const ids = new Set(apps.map(app => String(app.id)));
+  if (!ids.has('1245620') || !ids.has('2778580')) return null;
+
+  return {
+    type: 'package',
+    steamId: packageId,
+    title: String(product?.name || steamName),
+    region: 'ru',
+    savedAt: new Date().toISOString(),
+    coverMode: 'steam',
+    coverAppId,
+    autoMatched: true,
+    matchSource: 'steam-package-known-edition',
+    steamSearchName: steamName,
+    packageKind: 'edition',
+    packageEdition: 'shadow_erdtree_edition',
+    matchConfidence: 1
+  };
+}
+
 async function discoverEditionPackageCandidates(product, baseApp) {
   const wantedEdition = editionInfo(product?.name);
   if (!wantedEdition.tag || wantedEdition.tag === 'standard') return [];
@@ -1346,6 +1414,26 @@ async function adminSteamCandidates(product, matches = null) {
   const dlcProduct = isDlcDigisellerProduct(product);
   const edition = editionInfo(product?.name);
 
+  if (isEldenRingShadowErdtreeEditionPackage(product?.name)) {
+    const known = await matchEldenRingShadowErdtreeEditionPackage(product);
+    return {
+      mode: 'edition-package',
+      query: 'ELDEN RING Shadow of the Erdtree Edition',
+      baseApp: { appId: '1245620', name: 'ELDEN RING', clear: true },
+      candidates: known ? [{
+        type: 'package',
+        steamId: String(known.steamId),
+        name: String(known.steamSearchName || known.title),
+        coverAppId: String(known.coverAppId || '1245620'),
+        editionMatch: true,
+        exactBase: true,
+        suspicious: false,
+        score: 1,
+        confidence: 1
+      }] : []
+    };
+  }
+
   if (!dlcProduct && isNamedCollectionPackage(product.name)) {
     const packages = await discoverNamedPackageCandidates(product, matches);
     return {
@@ -1497,6 +1585,13 @@ function standardEditionStoreAliasMatch(productTitle, steamTitle) {
 async function matchFromSteamSearch(product, matches = null) {
   const dlcProduct = isDlcDigisellerProduct(product);
   const currentEdition = editionInfo(product.name);
+
+  // "ELDEN RING Shadow of the Erdtree Edition" is a full commercial
+  // package (base game + DLC), despite sharing almost the entire title with
+  // the standalone DLC app. Resolve the package before ordinary app search.
+  if (isEldenRingShadowErdtreeEditionPackage(product?.name)) {
+    return matchEldenRingShadowErdtreeEditionPackage(product);
+  }
 
   // Explicit collection names such as "Remake Trilogy" are Steam packages,
   // not apps and not ordinary commercial editions.
@@ -1664,6 +1759,38 @@ async function fetchDigisellerCatalog() {
   return expanded;
 }
 
+function shouldRematchEldenRingErdtreeDeluxe(product, match) {
+  if (!isEldenRingShadowErdtreeDeluxeAlias(product?.name)) return false;
+  if (!match?.steamId) return false;
+  return String(match.type || '').toLowerCase() !== 'package'
+    || String(match.packageEdition || '').toLowerCase() !== 'deluxe';
+}
+
+function shouldRematchEldenRingErdtreeEdition(product, match) {
+  if (!isEldenRingShadowErdtreeEditionPackage(product?.name)) return false;
+  if (!match?.steamId) return false;
+  return String(match.type || '').toLowerCase() !== 'package'
+    || String(match.packageEdition || '').toLowerCase() !== 'shadow_erdtree_edition';
+}
+
+function repairKnownDlcMatchMetadata(product, match) {
+  if (!match?.steamId || String(match.type || '').toLowerCase() !== 'app') return false;
+  if (!isEldenRingShadowErdtreeTitle(product?.name)) return false;
+  if (isEldenRingShadowErdtreeDeluxeAlias(product?.name)) return false;
+  if (isEldenRingShadowErdtreeEditionPackage(product?.name)) return false;
+
+  let changed = false;
+  if (String(match.steamProductType || '').toLowerCase() !== 'dlc') {
+    match.steamProductType = 'dlc';
+    changed = true;
+  }
+  if (!String(match.categoryName || '').trim()) {
+    match.categoryName = String(product?.categoryName || '');
+    changed = true;
+  }
+  return changed;
+}
+
 async function runAutomaticMatchSync(force = false) {
   const now = Date.now();
 
@@ -1717,6 +1844,33 @@ async function runAutomaticMatchSync(force = false) {
           report.repaired = Number(report.repaired || 0) + 1;
         }
 
+        // Repair the seller-specific ELDEN RING shorthand without touching
+        // unrelated "DE" tokens: here DE explicitly means Deluxe Edition.
+        // A stale AppID mapping would otherwise keep the Deluxe offer tied to
+        // the standalone DLC/base app forever.
+        if (shouldRematchEldenRingErdtreeDeluxe(product, matches[productId])) {
+          delete matches[productId];
+          changed = true;
+          report.repaired = Number(report.repaired || 0) + 1;
+        }
+
+        // Older builds could bind "Shadow of the Erdtree Edition" to the
+        // standalone DLC AppID because both titles normalize almost identically.
+        // Force that full edition back through package matching.
+        if (shouldRematchEldenRingErdtreeEdition(product, matches[productId])) {
+          delete matches[productId];
+          changed = true;
+          report.repaired = Number(report.repaired || 0) + 1;
+        }
+
+        // Existing standalone Shadow of the Erdtree mappings may already point
+        // to the correct AppID but predate steamProductType metadata. Mark them
+        // as DLC so the storefront renders the purple DLC badge immediately.
+        if (matches[productId]?.steamId && repairKnownDlcMatchMetadata(product, matches[productId])) {
+          changed = true;
+          report.repaired = Number(report.repaired || 0) + 1;
+        }
+
         if (matches[productId]?.steamId) {
           report.alreadyMatched++;
           continue;
@@ -1735,6 +1889,7 @@ async function runAutomaticMatchSync(force = false) {
         }
 
         const paidVirtualEdition = isVirtualPaidEdition(product);
+        const knownFullPackageEdition = isEldenRingShadowErdtreeEditionPackage(product?.name);
 
         // Paid virtual editions are special: resolve their edition-specific
         // Steam Package/SubID BEFORE any historical inheritance. The base AppID
@@ -1752,10 +1907,26 @@ async function runAutomaticMatchSync(force = false) {
           }
         }
 
+        // Shadow of the Erdtree Edition shares almost all title tokens with the
+        // standalone DLC, so historical AppID inheritance is unsafe. Resolve
+        // the known full package first and, if Steam is temporarily unavailable,
+        // leave it unresolved rather than reusing the DLC price.
+        if (knownFullPackageEdition && steamSearches < AUTO_MATCH_MAX_STEAM_SEARCHES) {
+          steamSearches++;
+          const steam = await matchFromSteamSearch(product, matches);
+          if (steam) {
+            matches[productId] = steam;
+            changed = true;
+            report.steamPackageMatched++;
+            continue;
+          }
+        }
+
         // Safest historical case: same game/edition was previously sold under
         // another Digiseller Product ID. For paid virtual editions this helper
-        // accepts only a package with the exact same edition tag.
-        const inherited = cloneHistoricalMatch(product, matches);
+        // accepts only a package with the exact same edition tag. The known
+        // Erdtree full package deliberately skips history to avoid DLC reuse.
+        const inherited = knownFullPackageEdition ? null : cloneHistoricalMatch(product, matches);
         if (inherited) {
           matches[productId] = inherited;
           changed = true;
