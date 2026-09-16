@@ -1565,7 +1565,8 @@ function hasDlcTitleLabel(title) {
     // "steam" too: "STEAM КЛЮЧ" previously left an extra "steam" token while
     // "Steam Gift" was removed as a whole, splitting Key and Gift cards.
     s = s.replace(/(?:steam\s*gift|steam\s*auto|автодоставка|гифт|gift|ключ|\bkey\b|\bsteam\b)/giu, ' ');
-    s = s.replace(/(?<![\p{L}\p{N}])(?:ру|рф|снг|укр|украина|мир|латам|тр|ua|ukr|ukraine|ru|rf|by|kz|tr|ar|cis|latam|world|global)(?![\p{L}\p{N}])/giu, ' ');
+    s = s.replace(/rest\s+of\s+(?:the\s+)?world/giu, ' ');
+    s = s.replace(/(?<![\p{L}\p{N}])(?:ру|рф|снг|укр|украина|мир|латам|тр|ua|ukr|ukraine|ru|rf|by|kz|tr|ar|cis|latam|row|world|global|worldwide)(?![\p{L}\p{N}])/giu, ' ');
     s = s.replace(/\b(?:deluxe|premium|ultimate|gold|complete|collector'?s?|definitive|commander|devout|eclipse|anniversary|goty|special|divine|eternal|bundle|trilogy|collection|anthology|compilation|franchise\s+pack)(?:\s+edition)?\b/giu, ' ');
     s = s.replace(/издани[ея]/giu, ' ');
     s = s.replace(/[^\p{L}\p{N}]+/gu, ' ');
