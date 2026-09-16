@@ -1455,9 +1455,9 @@ function hasDlcTitleLabel(title) {
     editionFilterWrap.setAttribute('aria-hidden', String(!visible));
     editionFilterSelect.tabIndex = visible ? 0 : -1;
     const available = new Set(state.rawProducts.map(getProductEdition));
-    if (!visible || (!['no-expanded', 'expanded'].includes(state.editionFilter) && !available.has(state.editionFilter))) state.editionFilter = 'all';
+    if (!visible || state.editionFilter === 'other' || (!['no-expanded', 'expanded'].includes(state.editionFilter) && !available.has(state.editionFilter))) state.editionFilter = 'all';
     editionFilterSelect.innerHTML = '<option value="all">Издание: все</option><option value="no-expanded">Издание: без расширенных</option><option value="expanded">Издание: расширенное</option>' +
-      EDITION_OPTIONS.filter(([value]) => available.has(value)).map(([value, label]) =>
+      EDITION_OPTIONS.filter(([value]) => value !== 'other' && available.has(value)).map(([value, label]) =>
         `<option value="${value}">Издание: ${label}</option>`).join('');
     editionFilterSelect.value = state.editionFilter;
   }
