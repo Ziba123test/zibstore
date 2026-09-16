@@ -1,0 +1,10 @@
+ZibStore v126 — ELDEN RING Shadow of the Erdtree Edition package fix
+
+- Distinguishes three different Steam commerce targets:
+  * ELDEN RING Shadow of the Erdtree -> standalone DLC AppID 2778580
+  * ELDEN RING Shadow of the Erdtree Edition -> full package SubID 1010505 (base game + DLC)
+  * seller suffix DE -> Deluxe Edition package (existing v125 behavior)
+- Forces stale "... Erdtree Edition" AppID/DLC mappings to rematch as a package.
+- Prevents historical DLC mappings from being inherited by the full Edition package.
+- Admin Steam search shows the full package candidate for this exact Edition.
+- Storefront no longer classifies "... Erdtree Edition" as DLC; it remains a full edition and uses package pricing.

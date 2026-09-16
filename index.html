@@ -1224,8 +1224,33 @@
   }
 
 
+  function isEldenRingShadowErdtreeTitle(value) {
+    return /\belden\s+ring\s+shadow\s+of\s+the\s+erdtree\b/i.test(
+      String(value || '').normalize('NFKC')
+    );
+  }
+
+  function isEldenRingShadowErdtreeDeluxeAlias(value) {
+    return /\belden\s+ring\s+shadow\s+of\s+the\s+erdtree\s+de(?=\s*(?:[*+|/\\()[\]{}<>—–_-]|$))/i.test(
+      String(value || '').normalize('NFKC')
+    );
+  }
+
+  function isEldenRingShadowErdtreeEditionPackage(value) {
+    const s = String(value || '').normalize('NFKC');
+    return /\belden\s+ring\s+shadow\s+of\s+the\s+erdtree\s+edition\b/i.test(s)
+      && !/\bdeluxe\s+edition\b/i.test(s);
+  }
+
+  function expandKnownEditionAliases(value) {
+    return String(value || '').normalize('NFKC').replace(
+      /(\belden\s+ring\s+shadow\s+of\s+the\s+erdtree)\s+de(?=\s*(?:[*+|/\\()[\]{}<>—–_-]|$))/ig,
+      '$1 Deluxe Edition'
+    );
+  }
+
   function getEditionBadge(title) {
-    const text = String(title || '');
+    const text = expandKnownEditionAliases(title);
 
     const rules = [
       { re: /\bpremium(?:\s+edition)?\b/i, label: 'PREMIUM' },
@@ -1357,6 +1382,13 @@ function hasDlcTitleLabel(title) {
     const saved = serverSteamMatches[String(product?.id || '')] || {};
     const savedCategory = String(saved?.categoryName || '').normalize('NFKC').toLowerCase();
 
+    // Distinguish the standalone DLC from the full commercial package named
+    // "ELDEN RING Shadow of the Erdtree Edition" (base game + DLC).
+    if (isEldenRingShadowErdtreeEditionPackage(product?.name)) return false;
+    if (isEldenRingShadowErdtreeTitle(product?.name) && !isEldenRingShadowErdtreeDeluxeAlias(product?.name)) {
+      return true;
+    }
+
     // Strongest signal: backend has validated the Steam App as type "dlc".
     if (String(saved?.steamProductType || '').toLowerCase() === 'dlc') return true;
     if (String(saved?.matchSource || '').toLowerCase() === 'steam-search-dlc') return true;
@@ -1404,7 +1436,8 @@ function hasDlcTitleLabel(title) {
   function getProductEdition(product) {
     // An upgrade/DLC is not a full-game edition, even when it says Deluxe.
     if (isDlcProduct(product)) return 'dlc';
-    const title = String(product?.name || '').normalize('NFKC');
+    if (isEldenRingShadowErdtreeEditionPackage(product?.name)) return 'other';
+    const title = expandKnownEditionAliases(product?.name);
     if (/выбор\s+издани|выберите\s+издани|(?:standard|deluxe|premium|gold|ultimate)\s*[\/|+]\s*(?:standard|deluxe|premium|gold|ultimate)/i.test(title)) return 'choice';
     if (/\bdeluxe\b|делюкс/iu.test(title)) return 'deluxe';
     if (/\bpremium\b|премиум/iu.test(title)) return 'premium';
@@ -1522,7 +1555,7 @@ function hasDlcTitleLabel(title) {
   function getEditionGroupingKey(product) {
     if (isDlcProduct(product)) return 'dlc';
 
-    const title = String(product?.name || '').normalize('NFKC');
+    const title = expandKnownEditionAliases(product?.name);
     if (/выбор\s+издани|выберите\s+издани|(?:standard|deluxe|premium|gold|ultimate)\s*[\/|+]\s*(?:standard|deluxe|premium|gold|ultimate)/i.test(title)) return 'choice';
 
     const rules = [
@@ -1548,7 +1581,7 @@ function hasDlcTitleLabel(title) {
   }
 
   function normalizeCatalogGroupTitle(value) {
-    let s = String(value || '').normalize('NFKC').toLowerCase();
+    let s = expandKnownEditionAliases(value).toLowerCase();
     s = s.replace(/[™®©℠]/g, ' ');
     s = s.replace(/[\u{1F000}-\u{1FAFF}\uFE0F]/gu, ' ');
     s = s.replace(/\((?:19|20)\d{2}\)/g, ' ');
